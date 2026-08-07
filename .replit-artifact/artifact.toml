@@ -1,0 +1,24 @@
+kind = "mobile"
+previewPath = "/"
+title = "INRAID Mobile"
+description = "A premium mobile transportation experience for Mexico, with trip booking, mock map tracking, trip history, and user profile flows powered by realistic mock data."
+version = "1.0.0"
+id = "artifacts/inraid-mobile"
+router = "expo-domain"
+
+[[services]]
+name = "expo"
+ensurePreviewReachable = "/status"
+paths = [ "/" ]
+localPort = 19161
+
+[services.development]
+run = "pnpm --filter @workspace/inraid-mobile run dev"
+
+[services.production]
+build = [ "pnpm", "--filter", "@workspace/inraid-mobile", "run", "build" ]
+run = [ "pnpm", "--filter", "@workspace/inraid-mobile", "run", "serve" ]
+
+[services.env]
+PORT = "19161"
+BASE_PATH = "/"
