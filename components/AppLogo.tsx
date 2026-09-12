@@ -1,19 +1,32 @@
 import { Image, StyleSheet, View } from 'react-native';
 
-export function AppLogo({ light = false }: { light?: boolean }) {
+const logoSource = require('@/assets/images/inride-logo.png');
+
+export function AppLogo({ large = false }: { light?: boolean; large?: boolean }) {
   return (
-    <View style={[styles.logoBox, { backgroundColor: light ? '#16362f' : '#111b17' }]}>
-      <Image
-        accessibilityLabel="INRAID"
-        source={require('@/assets/images/logo-inraid.png')}
-        style={styles.logoImage}
-        resizeMode="contain"
-      />
+    <View style={[styles.wrap, large && styles.wrapLarge]}>
+      <Image source={logoSource} style={[styles.logo, large && styles.logoLarge]} resizeMode="contain" />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  logoBox: { alignItems: 'center', borderRadius: 10, height: 34, justifyContent: 'center', overflow: 'hidden', paddingHorizontal: 8, width: 86 },
-  logoImage: { height: 31, width: 70 },
+  wrap: {
+    alignItems: 'center',
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  wrapLarge: {
+    height: 88,
+    width: 88,
+  },
+  logo: {
+    height: 48,
+    width: 48,
+  },
+  logoLarge: {
+    height: 88,
+    width: 88,
+  },
 });

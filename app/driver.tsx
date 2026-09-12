@@ -1,124 +1,501 @@
 import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { router } from 'expo-router';
-import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { Redirect, useRouter } from 'expo-router';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import {
+  Animated,
+  Easing,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppLogo } from '@/components/AppLogo';
+import { RideNotice } from '@/components/RideNotice';
+import { TripCard } from '@/components/TripCard';
+import { useAuth } from '@/context/AuthContext';
+import { useBooking } from '@/context/BookingContext';
 import { useColors } from '@/hooks/useColors';
-
-const offers = [
-  { id: 'offer-1', passenger: 'Daniel R.', pickup: 'Condesa', destination: 'Terminal 2 · AICM', distance: '8.4 km', duration: '26 min', price: '$186', net: '$158' },
-  { id: 'offer-2', passenger: 'Mariana L.', pickup: 'Polanco', destination: 'Santa Fe Centro', distance: '11.2 km', duration: '32 min', price: '$244', net: '$207' },
-];
+import type { Ride } from '@/types';
 
 export default function DriverScreen() {
   const colors = useColors();
-  const [online, setOnline] = useState(true);
-  const [accepted, setAccepted] = useState<string | null>(null);
-  const selected = offers.find((offer) => offer.id === accepted) ?? offers[0];
+  const router = useRouter();
+  const { user, logout, docsComplete, isReady, role } = useAuth();
+  const { trips, openRides, acceptRideAsDriver, activeRide } = useBooking();
 
-  const toggleOnline = () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    setOnline((current) => !current);
-  };
+  const [selected, setSelected] = useState<Ride | null>(null);
+  const [showOfferModal, setShowOfferModal] = useState(false);
+  const [showNewTripNotice, setShowNewTripNotice] = useState(false);
+  const notifiedId = useRef<string | null>(null);
 
-  const acceptOffer = (id: string) => {
+  const pulse = useRef(new Animated.Value(0)).current;
+  const slide = useRef(new Animated.Value(24)).current;
+  const fade = useRef(new Animated.Value(0)).current;
+
+  const offer = useMemo(() => openRides[0] ?? null, [openRides]);
+  const live =
+    activeRide &&
+    ['accepted', 'en_route_pickup', 'arrived_pickup', 'in_progress'].includes(activeRide.status)
+      ? activeRide
+      : null;
+
+  useEffect(() => {
+    if (!docsComplete && role === 'driver') {
+      router.replace('/register-driver');
+    }
+  }, [docsComplete, role, router]);
+
+  useEffect(() => {
+    Animated.parallel([
+      Animated.timing(slide, {
+        toValue: 0,
+        duration: 520,
+        easing: Easing.out(Easing.cubic),
+        useNativeDriver: true,
+      }),
+      Animated.timing(fade, {
+        toValue: 1,
+        duration: 520,
+        useNativeDriver: true,
+      }),
+    ]).start();
+
+    Animated.loop(
+      Animated.sequence([
+        Animated.timing(pulse, {
+          toValue: 1,
+          duration: 1100,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+        Animated.timing(pulse, {
+          toValue: 0,
+          duration: 1100,
+          easing: Easing.inOut(Easing.ease),
+          useNativeDriver: true,
+        }),
+      ]),
+    ).start();
+  }, [fade, pulse, slide]);
+
+  useEffect(() => {
+    if (!offer || notifiedId.current === offer.id) return;
+    notifiedId.current = offer.id;
+    setSelected(offer);
+    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    setShowNewTripNotice(true);
+  }, [offer]);
+
+  if (isReady && (!user || role !== 'driver')) {
+    return <Redirect href="/" />;
+  }
+
+  const acceptTrip = async () => {
+    if (!selected && !offer) return;
     Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-    setAccepted(id);
+    try {
+      await acceptRideAsDriver(selected?.id ?? offer?.id);
+      setShowOfferModal(false);
+      setShowNewTripNotice(false);
+      router.push('/map');
+    } catch (e) {
+      console.warn(e);
+    }
   };
+
+  const current = selected ?? offer;
+  const ringScale = pulse.interpolate({ inputRange: [0, 1], outputRange: [1, 1.35] });
+  const ringOpacity = pulse.interpolate({ inputRange: [0, 1], outputRange: [0.45, 0] });
+
+  const completed = trips.filter((t) => t.status === 'Completado');
+  const avgRating =
+    completed.reduce((sum, t) => sum + (t.rating ?? 0), 0) /
+    Math.max(completed.filter((t) => t.rating).length, 1);
+  const weekEarnings = completed.reduce((sum, t) => sum + t.driverNet, 0);
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
-      <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
-          <Pressable testID="back-driver" onPress={() => router.back()} style={styles.back}><Feather name="arrow-left" size={20} color={colors.foreground} /></Pressable>
+          <Pressable
+            testID="back-driver"
+            onPress={async () => {
+              await logout();
+            }}
+            style={[styles.back, { backgroundColor: colors.card, borderColor: colors.border }]}
+          >
+            <Feather name="log-out" size={18} color={colors.foreground} />
+          </Pressable>
           <AppLogo light />
-          <Pressable testID="driver-toggle" onPress={toggleOnline} style={[styles.onlinePill, { backgroundColor: online ? colors.secondary : colors.muted }]}><View style={[styles.onlineDot, { backgroundColor: online ? colors.primary : colors.mutedForeground }]} /><Text style={[styles.onlineText, { color: online ? colors.primary : colors.mutedForeground }]}>{online ? 'En línea' : 'Desconectado'}</Text></Pressable>
+          <View style={[styles.onlinePill, { backgroundColor: colors.secondary }]}>
+            <View style={[styles.onlineDot, { backgroundColor: colors.primary }]} />
+            <Text style={[styles.onlineText, { color: colors.primary }]}>En línea</Text>
+          </View>
         </View>
-        <View style={[styles.welcome, { backgroundColor: '#16362f' }]}>
-          <View style={styles.welcomeCopy}><Text style={styles.welcomeEyebrow}>CENTRO DEL CONDUCTOR</Text><Text style={styles.welcomeTitle}>Hola, Mauricio</Text><Text style={styles.welcomeCopyText}>{online ? 'Hay solicitudes cerca de ti.' : 'Conéctate para empezar a recibir viajes.'}</Text></View>
-          <View style={styles.steering}><Feather name="navigation" size={23} color="#16362f" /></View>
-        </View>
+
+        <LinearGradient colors={['#16362f', '#1f4f43', '#138a68']} style={styles.hero}>
+          <View style={styles.heroCopy}>
+            <Text style={styles.heroEyebrow}>CENTRO DEL CONDUCTOR · INRIDE</Text>
+            <Text style={styles.heroTitle}>Hola, {user?.firstName ?? 'Mauricio'}</Text>
+            <Text style={styles.heroSubtitle}>
+              {user?.bio ?? 'Toyota Corolla · NRA-218'} · {(user?.rating ?? 4.98).toFixed(2)} ★
+            </Text>
+          </View>
+          <View style={styles.heroBadge}>
+            <Feather name="navigation" size={22} color="#16362f" />
+          </View>
+        </LinearGradient>
+
         <View style={styles.statsRow}>
-          <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.statIcon, { backgroundColor: colors.secondary }]}><Feather name="trending-up" size={16} color={colors.primary} /></View><Text style={[styles.statLabel, { color: colors.mutedForeground }]}>HOY</Text><Text style={[styles.statValue, { color: colors.foreground }]}>$1,248</Text><Text style={[styles.statHint, { color: colors.primary }]}>+18% vs. ayer</Text></View>
-          <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.statIcon, { backgroundColor: '#fff1df' }]}><Feather name="navigation" size={16} color="#d88d2e" /></View><Text style={[styles.statLabel, { color: colors.mutedForeground }]}>VIAJES</Text><Text style={[styles.statValue, { color: colors.foreground }]}>8</Text><Text style={[styles.statHint, { color: colors.mutedForeground }]}>6 h 24 min en ruta</Text></View>
+          <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>GANANCIAS</Text>
+            <Text style={[styles.statValue, { color: colors.foreground }]}>
+              ${weekEarnings.toFixed(0)}
+            </Text>
+          </View>
+          <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>RATING</Text>
+            <Text style={[styles.statValue, { color: colors.foreground }]}>
+              {(user?.rating ?? avgRating).toFixed(2)}
+            </Text>
+          </View>
         </View>
-        <View style={styles.sectionHeader}><View><Text style={[styles.eyebrow, { color: colors.primary }]}>SOLICITUDES CERCA DE TI</Text><Text style={[styles.sectionTitle, { color: colors.foreground }]}>{online ? 'Elige tu próximo viaje' : 'No estás disponible'}</Text></View><View style={[styles.radius, { backgroundColor: colors.secondary }]}><Feather name="radio" size={13} color={colors.primary} /><Text style={[styles.radiusText, { color: colors.primary }]}>5 km</Text></View></View>
-        {online ? <View style={styles.offerList}>{offers.map((offer) => <View key={offer.id} style={[styles.offerCard, { backgroundColor: colors.card, borderColor: accepted === offer.id ? colors.primary : colors.border }]}><View style={styles.offerTop}><View style={[styles.passengerAvatar, { backgroundColor: colors.secondary }]}><Feather name="user" size={17} color={colors.primary} /></View><View style={styles.passengerCopy}><Text style={[styles.passengerName, { color: colors.foreground }]}>{offer.passenger}</Text><View style={styles.passengerRating}><Feather name="star" size={11} color="#e9a33f" /><Text style={[styles.ratingText, { color: colors.mutedForeground }]}>4.9 · pasajero frecuente</Text></View></View><Text style={[styles.offerPrice, { color: colors.foreground }]}>{offer.price}</Text></View><View style={styles.route}><View style={styles.routeLine}><View style={[styles.routeDot, { backgroundColor: colors.primary }]} /><View style={[styles.routeDash, { borderColor: colors.border }]} /><View style={[styles.routeDot, { backgroundColor: '#e49339' }]} /></View><View style={styles.routeCopy}><Text style={[styles.routeLabel, { color: colors.mutedForeground }]}>RECOGER EN</Text><Text style={[styles.routeValue, { color: colors.foreground }]}>{offer.pickup}</Text><Text style={[styles.routeLabel, { color: colors.mutedForeground, marginTop: 13 }]}>DESTINO</Text><Text style={[styles.routeValue, { color: colors.foreground }]}>{offer.destination}</Text></View><View style={styles.routeMeta}><Text style={[styles.metaValue, { color: colors.foreground }]}>{offer.distance}</Text><Text style={[styles.metaLabel, { color: colors.mutedForeground }]}>distancia</Text><Text style={[styles.metaValue, { color: colors.foreground, marginTop: 13 }]}>{offer.duration}</Text><Text style={[styles.metaLabel, { color: colors.mutedForeground }]}>estimado</Text></View></View><View style={[styles.offerBottom, { borderTopColor: colors.border }]}><View><Text style={[styles.netLabel, { color: colors.mutedForeground }]}>RECIBES APROX.</Text><Text style={[styles.netValue, { color: colors.primary }]}>{offer.net}</Text></View><Pressable testID={`accept-${offer.id}`} onPress={() => acceptOffer(offer.id)} style={({ pressed }) => [styles.acceptButton, { backgroundColor: accepted === offer.id ? colors.secondary : colors.primary }, pressed && styles.pressed]}><Text style={[styles.acceptText, { color: accepted === offer.id ? colors.primary : '#ffffff' }]}>{accepted === offer.id ? 'Viaje aceptado' : 'Aceptar viaje'}</Text><Feather name={accepted === offer.id ? 'check' : 'arrow-up-right'} size={16} color={accepted === offer.id ? colors.primary : '#ffffff'} /></Pressable></View></View>)}</View> : <View style={[styles.offlineCard, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={[styles.offlineIcon, { backgroundColor: colors.muted }]}><Feather name="power" size={22} color={colors.mutedForeground} /></View><Text style={[styles.offlineTitle, { color: colors.foreground }]}>Activa tu disponibilidad</Text><Text style={[styles.offlineCopy, { color: colors.mutedForeground }]}>Recibirás solicitudes según tu zona y preferencias de viaje.</Text><Pressable onPress={toggleOnline} style={[styles.connectButton, { backgroundColor: colors.primary }]}><Text style={styles.connectText}>Conectarme</Text></Pressable></View>}
-        <View style={[styles.earningsCard, { backgroundColor: colors.secondary }]}><View style={styles.earningsHeader}><View><Text style={[styles.earningsEyebrow, { color: colors.primary }]}>RESUMEN SEMANAL</Text><Text style={[styles.earningsTitle, { color: colors.foreground }]}>Tus ganancias</Text></View><Feather name="bar-chart-2" size={21} color={colors.primary} /></View><View style={styles.chart}><View style={[styles.bar, { backgroundColor: '#aad9bd', height: 30 }]} /><View style={[styles.bar, { backgroundColor: '#aad9bd', height: 46 }]} /><View style={[styles.bar, { backgroundColor: '#aad9bd', height: 38 }]} /><View style={[styles.bar, { backgroundColor: '#aad9bd', height: 60 }]} /><View style={[styles.bar, { backgroundColor: colors.primary, height: 82 }]} /><View style={[styles.bar, { backgroundColor: '#aad9bd', height: 51 }]} /><View style={[styles.bar, { backgroundColor: '#aad9bd', height: 40 }]} /></View><View style={styles.days}><Text>L</Text><Text>M</Text><Text>M</Text><Text>J</Text><Text style={{ color: colors.primary, fontFamily: 'Inter_700Bold' }}>V</Text><Text>S</Text><Text>D</Text></View><View style={styles.weekTotal}><Text style={[styles.weekTotalLabel, { color: colors.mutedForeground }]}>TOTAL ESTA SEMANA</Text><Text style={[styles.weekTotalValue, { color: colors.foreground }]}>$6,842</Text></View></View>
-        <View style={[styles.tip, { borderColor: colors.border }]}><Feather name="shield" size={16} color={colors.primary} /><Text style={[styles.tipText, { color: colors.mutedForeground }]}>Tu seguridad es prioridad. La información del pasajero se muestra solo después de aceptar el viaje.</Text></View>
+
+        {live ? (
+          <Pressable
+            onPress={() => router.push('/map')}
+            style={[styles.alertCard, { backgroundColor: colors.secondary, borderColor: colors.primary }]}
+          >
+            <Text style={[styles.alertTitle, { color: colors.foreground }]}>Viaje activo</Text>
+            <Text style={[styles.alertSubtitle, { color: colors.mutedForeground }]}>
+              {live.origin} → {live.destination} · toca para abrir mapa
+            </Text>
+          </Pressable>
+        ) : null}
+
+        {current ? (
+          <Animated.View style={{ opacity: fade, transform: [{ translateY: slide }] }}>
+            <Pressable
+              onPress={() => {
+                setSelected(current);
+                setShowOfferModal(true);
+              }}
+              style={[styles.alertCard, { backgroundColor: colors.card, borderColor: colors.primary }]}
+            >
+              <View style={styles.alertHeader}>
+                <View style={styles.alertBadgeWrap}>
+                  <Animated.View
+                    style={[
+                      styles.alertPulse,
+                      {
+                        backgroundColor: colors.primary,
+                        opacity: ringOpacity,
+                        transform: [{ scale: ringScale }],
+                      },
+                    ]}
+                  />
+                  <View style={[styles.alertBadge, { backgroundColor: colors.primary }]}>
+                    <Feather name="bell" size={16} color="#ffffff" />
+                  </View>
+                </View>
+                <View style={styles.alertHeaderCopy}>
+                  <Text style={[styles.alertTitle, { color: colors.foreground }]}>
+                    ¡Nuevo viaje disponible!
+                  </Text>
+                  <Text style={[styles.alertSubtitle, { color: colors.mutedForeground }]}>
+                    {current.passengerName} · {current.origin} → {current.destination}
+                  </Text>
+                </View>
+                <Feather name="chevron-right" size={18} color={colors.primary} />
+              </View>
+            </Pressable>
+          </Animated.View>
+        ) : (
+          <View style={[styles.alertCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+            <Text style={[styles.alertTitle, { color: colors.foreground }]}>Sin solicitudes</Text>
+            <Text style={[styles.alertSubtitle, { color: colors.mutedForeground }]}>
+              Cuando Sofía pida un viaje en el otro dispositivo, aparecerá aquí.
+            </Text>
+          </View>
+        )}
+
+        <View style={styles.sectionHeader}>
+          <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Viajes recientes</Text>
+        </View>
+        <View style={styles.tripList}>
+          {trips.slice(0, 4).map((trip) => (
+            <TripCard key={trip.id} trip={trip} showDriverEarnings />
+          ))}
+        </View>
       </ScrollView>
+
+      <Modal visible={showOfferModal && !!current} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.offerSheet, { backgroundColor: colors.background }]}>
+            <SafeAreaView edges={['bottom']} style={styles.offerContent}>
+              <View style={styles.sheetHandle} />
+              <Text style={[styles.offerTitle, { color: colors.foreground }]}>Detalle del viaje</Text>
+              <Text style={[styles.offerSubtitle, { color: colors.mutedForeground }]}>
+                Aceptar abre la ruta hasta el punto de recogida
+              </Text>
+
+              <View style={[styles.passengerCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <View style={[styles.avatar, { backgroundColor: colors.secondary }]}>
+                  <Feather name="user" size={22} color={colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.passengerName, { color: colors.foreground }]}>
+                    {current?.passengerName}
+                  </Text>
+                  <View style={styles.ratingRow}>
+                    <Feather name="star" size={13} color="#e9a33f" />
+                    <Text style={[styles.ratingText, { color: colors.mutedForeground }]}>
+                      {current?.passengerRating} · pasajero
+                    </Text>
+                  </View>
+                </View>
+                <Text style={[styles.offerPrice, { color: colors.foreground }]}>
+                  ${Number(current?.price ?? 0).toFixed(0)}
+                </Text>
+              </View>
+
+              <View style={[styles.infoCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+                <InfoRow icon="map-pin" label="Origen" value={current?.origin ?? ''} colors={colors} />
+                <InfoRow icon="flag" label="Destino" value={current?.destination ?? ''} colors={colors} />
+                <InfoRow
+                  icon="navigation"
+                  label="Distancia"
+                  value={`${current?.distanceKm ?? 0} km`}
+                  colors={colors}
+                />
+                <InfoRow
+                  icon="dollar-sign"
+                  label="Tu ganancia neta"
+                  value={`$${Number(current?.driverNet ?? 0).toFixed(2)}`}
+                  colors={colors}
+                  highlight
+                />
+              </View>
+
+              <Pressable
+                testID="accept-trip"
+                onPress={acceptTrip}
+                style={({ pressed }) => [styles.acceptWrap, pressed && styles.pressed]}
+              >
+                <LinearGradient colors={['#138a68', '#0f7458']} style={styles.acceptBtn}>
+                  <Text style={styles.acceptText}>Aceptar y navegar al pickup</Text>
+                  <Feather name="arrow-up-right" size={18} color="#ffffff" />
+                </LinearGradient>
+              </Pressable>
+
+              <Pressable onPress={() => setShowOfferModal(false)} style={styles.dismiss}>
+                <Text style={[styles.dismissText, { color: colors.mutedForeground }]}>Cerrar</Text>
+              </Pressable>
+            </SafeAreaView>
+          </View>
+        </View>
+      </Modal>
+
+      <RideNotice
+        visible={showNewTripNotice && !!current}
+        tone="warning"
+        icon="bell"
+        eyebrow="NUEVO VIAJE"
+        title="¡Viaje disponible!"
+        message="Solicitud en tiempo real desde el otro dispositivo."
+        details={[
+          {
+            label: 'Pasajero',
+            value: `${current?.passengerName ?? ''} · ${current?.passengerRating ?? ''} ★`,
+          },
+          { label: 'Ruta', value: `${current?.origin ?? ''} → ${current?.destination ?? ''}` },
+          { label: 'Ganas', value: `$${Number(current?.driverNet ?? 0).toFixed(2)}` },
+        ]}
+        primaryLabel="Ver detalles"
+        onPrimary={() => {
+          setShowNewTripNotice(false);
+          setShowOfferModal(true);
+        }}
+        secondaryLabel="Después"
+        onSecondary={() => setShowNewTripNotice(false)}
+      />
     </SafeAreaView>
+  );
+}
+
+function InfoRow({
+  icon,
+  label,
+  value,
+  colors,
+  highlight,
+}: {
+  icon: keyof typeof Feather.glyphMap;
+  label: string;
+  value: string;
+  colors: ReturnType<typeof useColors>;
+  highlight?: boolean;
+}) {
+  return (
+    <View style={styles.infoRow}>
+      <View style={[styles.infoIcon, { backgroundColor: colors.secondary }]}>
+        <Feather name={icon} size={14} color={colors.primary} />
+      </View>
+      <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>{label}</Text>
+      <Text
+        style={[
+          styles.infoValue,
+          { color: highlight ? colors.primary : colors.foreground },
+          highlight && styles.infoValueBold,
+        ]}
+      >
+        {value}
+      </Text>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
   safe: { flex: 1 },
-  content: { gap: 19, paddingBottom: 30, paddingHorizontal: 20 },
-  header: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', paddingTop: 5 },
-  back: { alignItems: 'center', height: 40, justifyContent: 'center', width: 40 },
-  onlinePill: { alignItems: 'center', borderRadius: 100, flexDirection: 'row', gap: 6, paddingHorizontal: 10, paddingVertical: 8 },
+  scrollContent: { gap: 18, paddingBottom: 36, paddingHorizontal: 20, paddingTop: 5 },
+  header: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+  },
+  back: {
+    alignItems: 'center',
+    borderRadius: 14,
+    borderWidth: 1,
+    height: 42,
+    justifyContent: 'center',
+    width: 42,
+  },
+  onlinePill: {
+    alignItems: 'center',
+    borderRadius: 100,
+    flexDirection: 'row',
+    gap: 6,
+    paddingHorizontal: 11,
+    paddingVertical: 8,
+  },
   onlineDot: { borderRadius: 5, height: 7, width: 7 },
   onlineText: { fontFamily: 'Inter_700Bold', fontSize: 10 },
-  welcome: { alignItems: 'center', borderRadius: 23, flexDirection: 'row', justifyContent: 'space-between', overflow: 'hidden', padding: 18 },
-  welcomeCopy: { flex: 1, gap: 7 },
-  welcomeEyebrow: { color: '#b9ead0', fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.4 },
-  welcomeTitle: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 24, letterSpacing: -0.6 },
-  welcomeCopyText: { color: '#c5edda', fontFamily: 'Inter_400Regular', fontSize: 12 },
-  steering: { alignItems: 'center', backgroundColor: '#d8f1e4', borderRadius: 23, height: 50, justifyContent: 'center', width: 50 },
-  statsRow: { flexDirection: 'row', gap: 11 },
-  statCard: { borderRadius: 18, borderWidth: 1, flex: 1, gap: 4, padding: 13 },
-  statIcon: { alignItems: 'center', borderRadius: 10, height: 31, justifyContent: 'center', marginBottom: 3, width: 31 },
+  hero: { borderRadius: 24, flexDirection: 'row', overflow: 'hidden', padding: 18 },
+  heroCopy: { flex: 1, gap: 6 },
+  heroEyebrow: {
+    color: '#b9ead0',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 9,
+    letterSpacing: 1.4,
+  },
+  heroTitle: {
+    color: '#ffffff',
+    fontFamily: 'Inter_700Bold',
+    fontSize: 24,
+    letterSpacing: -0.6,
+  },
+  heroSubtitle: { color: '#c5edda', fontFamily: 'Inter_400Regular', fontSize: 12 },
+  heroBadge: {
+    alignItems: 'center',
+    backgroundColor: '#d8f1e4',
+    borderRadius: 22,
+    height: 52,
+    justifyContent: 'center',
+    width: 52,
+  },
+  statsRow: { flexDirection: 'row', gap: 12 },
+  statCard: { borderRadius: 18, borderWidth: 1, flex: 1, gap: 4, padding: 14 },
   statLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1 },
-  statValue: { fontFamily: 'Inter_700Bold', fontSize: 23 },
-  statHint: { fontFamily: 'Inter_500Medium', fontSize: 10 },
-  sectionHeader: { alignItems: 'flex-end', flexDirection: 'row', justifyContent: 'space-between' },
-  eyebrow: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.4, marginBottom: 5 },
-  sectionTitle: { fontFamily: 'Inter_700Bold', fontSize: 20, letterSpacing: -0.4 },
-  radius: { alignItems: 'center', borderRadius: 100, flexDirection: 'row', gap: 5, paddingHorizontal: 9, paddingVertical: 7 },
-  radiusText: { fontFamily: 'Inter_700Bold', fontSize: 10 },
-  offerList: { gap: 12 },
-  offerCard: { borderRadius: 20, borderWidth: 1, padding: 15 },
-  offerTop: { alignItems: 'center', flexDirection: 'row', gap: 10 },
-  passengerAvatar: { alignItems: 'center', borderRadius: 20, height: 40, justifyContent: 'center', width: 40 },
-  passengerCopy: { flex: 1, gap: 4 },
-  passengerName: { fontFamily: 'Inter_700Bold', fontSize: 13 },
-  passengerRating: { alignItems: 'center', flexDirection: 'row', gap: 4 },
-  ratingText: { fontFamily: 'Inter_400Regular', fontSize: 10 },
-  offerPrice: { fontFamily: 'Inter_700Bold', fontSize: 20 },
-  route: { flexDirection: 'row', gap: 11, marginTop: 18 },
-  routeLine: { alignItems: 'center', height: 85, justifyContent: 'space-between', width: 9 },
-  routeDot: { borderRadius: 9, height: 8, width: 8 },
-  routeDash: { borderLeftWidth: 1, borderStyle: 'dashed', flex: 1 },
-  routeCopy: { flex: 1 },
-  routeLabel: { fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 1 },
-  routeValue: { fontFamily: 'Inter_600SemiBold', fontSize: 13, marginTop: 3 },
-  routeMeta: { alignItems: 'flex-end' },
-  metaValue: { fontFamily: 'Inter_700Bold', fontSize: 13 },
-  metaLabel: { fontFamily: 'Inter_400Regular', fontSize: 9, marginTop: 2 },
-  offerBottom: { alignItems: 'center', borderTopWidth: 1, flexDirection: 'row', justifyContent: 'space-between', marginTop: 17, paddingTop: 13 },
-  netLabel: { fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 0.8 },
-  netValue: { fontFamily: 'Inter_700Bold', fontSize: 18, marginTop: 3 },
-  acceptButton: { alignItems: 'center', borderRadius: 11, flexDirection: 'row', gap: 7, paddingHorizontal: 12, paddingVertical: 11 },
-  acceptText: { fontFamily: 'Inter_700Bold', fontSize: 11 },
-  pressed: { opacity: 0.78 },
-  offlineCard: { alignItems: 'center', borderRadius: 20, borderWidth: 1, gap: 9, padding: 25 },
-  offlineIcon: { alignItems: 'center', borderRadius: 22, height: 46, justifyContent: 'center', width: 46 },
-  offlineTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 },
-  offlineCopy: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 18, textAlign: 'center' },
-  connectButton: { borderRadius: 11, marginTop: 4, paddingHorizontal: 17, paddingVertical: 11 },
-  connectText: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 12 },
-  earningsCard: { borderRadius: 20, padding: 16 },
-  earningsHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between' },
-  earningsEyebrow: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.3 },
-  earningsTitle: { fontFamily: 'Inter_700Bold', fontSize: 18, marginTop: 4 },
-  chart: { alignItems: 'flex-end', flexDirection: 'row', gap: 10, height: 94, justifyContent: 'center', marginTop: 10 },
-  bar: { borderRadius: 5, width: 23 },
-  days: { flexDirection: 'row', justifyContent: 'space-around', marginTop: 7 },
-  weekTotal: { alignItems: 'center', borderTopColor: '#cbe5d5', borderTopWidth: 1, marginTop: 14, paddingTop: 13 },
-  weekTotalLabel: { fontFamily: 'Inter_700Bold', fontSize: 8, letterSpacing: 1.1 },
-  weekTotalValue: { fontFamily: 'Inter_700Bold', fontSize: 22, marginTop: 4 },
-  tip: { alignItems: 'flex-start', borderRadius: 15, borderWidth: 1, flexDirection: 'row', gap: 9, padding: 13 },
-  tipText: { flex: 1, fontFamily: 'Inter_400Regular', fontSize: 10, lineHeight: 15 },
+  statValue: { fontFamily: 'Inter_700Bold', fontSize: 22 },
+  alertCard: { borderRadius: 20, borderWidth: 1.5, gap: 6, padding: 16 },
+  alertHeader: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  alertBadgeWrap: {
+    alignItems: 'center',
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  alertPulse: { borderRadius: 22, height: 44, position: 'absolute', width: 44 },
+  alertBadge: {
+    alignItems: 'center',
+    borderRadius: 22,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  alertHeaderCopy: { flex: 1, gap: 3 },
+  alertTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 },
+  alertSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 12 },
+  sectionHeader: { marginTop: 4 },
+  sectionTitle: { fontFamily: 'Inter_700Bold', fontSize: 18 },
+  tripList: { gap: 12 },
+  modalOverlay: {
+    backgroundColor: 'rgba(22,54,47,0.45)',
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  offerSheet: {
+    borderTopLeftRadius: 28,
+    borderTopRightRadius: 28,
+    maxHeight: '92%',
+  },
+  offerContent: { gap: 14, paddingBottom: 10, paddingHorizontal: 20, paddingTop: 10 },
+  sheetHandle: {
+    alignSelf: 'center',
+    backgroundColor: '#d0ded5',
+    borderRadius: 4,
+    height: 4,
+    width: 40,
+  },
+  offerTitle: { fontFamily: 'Inter_700Bold', fontSize: 22, letterSpacing: -0.4 },
+  offerSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 13, marginTop: -6 },
+  passengerCard: {
+    alignItems: 'center',
+    borderRadius: 18,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    padding: 14,
+  },
+  avatar: {
+    alignItems: 'center',
+    borderRadius: 24,
+    height: 48,
+    justifyContent: 'center',
+    width: 48,
+  },
+  passengerName: { fontFamily: 'Inter_700Bold', fontSize: 15 },
+  ratingRow: { alignItems: 'center', flexDirection: 'row', gap: 4, marginTop: 3 },
+  ratingText: { fontFamily: 'Inter_400Regular', fontSize: 12 },
+  offerPrice: { fontFamily: 'Inter_700Bold', fontSize: 24 },
+  infoCard: { borderRadius: 18, borderWidth: 1, gap: 12, padding: 14 },
+  infoRow: { alignItems: 'center', flexDirection: 'row', gap: 10 },
+  infoIcon: {
+    alignItems: 'center',
+    borderRadius: 10,
+    height: 30,
+    justifyContent: 'center',
+    width: 30,
+  },
+  infoLabel: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 12 },
+  infoValue: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  infoValueBold: { fontFamily: 'Inter_700Bold', fontSize: 15 },
+  acceptWrap: { borderRadius: 16, overflow: 'hidden' },
+  acceptBtn: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    paddingVertical: 16,
+  },
+  acceptText: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 15 },
+  dismiss: { alignItems: 'center', paddingVertical: 8 },
+  dismissText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  pressed: { opacity: 0.88 },
 });

@@ -13,19 +13,25 @@ import {
 } from '@expo-google-fonts/inter';
 import { Stack } from 'expo-router';
 import * as SplashScreen from 'expo-splash-screen';
+import { AuthProvider } from '@/context/AuthContext';
 import { BookingProvider } from '@/context/BookingContext';
+import { TariffProvider } from '@/context/TariffContext';
 
-// Prevent the splash screen from auto-hiding before asset loading is complete.
 SplashScreen.preventAutoHideAsync();
 
 const queryClient = new QueryClient();
 
 function RootLayoutNav() {
   return (
-    <Stack screenOptions={{ headerBackTitle: 'Back' }}>
+    <Stack screenOptions={{ headerBackTitle: 'Atrás' }}>
+      <Stack.Screen name="index" options={{ headerShown: false }} />
+      <Stack.Screen name="register" options={{ headerShown: false }} />
       <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+      <Stack.Screen name="register-driver" options={{ headerShown: false }} />
+      <Stack.Screen name="waiting" options={{ headerShown: false }} />
       <Stack.Screen name="driver" options={{ headerShown: false }} />
       <Stack.Screen name="map" options={{ headerShown: false }} />
+      <Stack.Screen name="admin" options={{ headerShown: false }} />
     </Stack>
   );
 }
@@ -50,13 +56,17 @@ export default function RootLayout() {
     <SafeAreaProvider>
       <ErrorBoundary>
         <QueryClientProvider client={queryClient}>
-          <BookingProvider>
-            <GestureHandlerRootView>
-              <KeyboardProvider>
-                <RootLayoutNav />
-              </KeyboardProvider>
-            </GestureHandlerRootView>
-          </BookingProvider>
+          <AuthProvider>
+            <TariffProvider>
+              <BookingProvider>
+                <GestureHandlerRootView style={{ flex: 1 }}>
+                  <KeyboardProvider>
+                    <RootLayoutNav />
+                  </KeyboardProvider>
+                </GestureHandlerRootView>
+              </BookingProvider>
+            </TariffProvider>
+          </AuthProvider>
         </QueryClientProvider>
       </ErrorBoundary>
     </SafeAreaProvider>

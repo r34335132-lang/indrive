@@ -1,84 +1,542 @@
 import { Feather } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { router } from 'expo-router';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import * as Haptics from 'expo-haptics';
+import * as Location from 'expo-location';
+import { useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  ActivityIndicator,
+  Platform,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import MapView, { Marker, Polyline, PROVIDER_DEFAULT, PROVIDER_GOOGLE } from 'react-native-maps';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { RideNotice } from '@/components/RideNotice';
+import { fetchRideLocation, subscribeRideLocation } from '@/lib/api/rides';
+import { useAuth } from '@/context/AuthContext';
 import { useBooking } from '@/context/BookingContext';
 import { useColors } from '@/hooks/useColors';
+import {
+  bearingBetween,
+  DRIVER_NEARBY,
+  loadStreetRoutes,
+  remainingDistanceKm,
+  type LatLng,
+} from '@/lib/routing';
+
+type Phase =
+  | 'loading'
+  | 'to_pickup'
+  | 'arrived_pickup'
+  | 'to_destination'
+  | 'done';
+
+const STEP_MS = 280;
+const LAT_DELTA = 0.008;
+const LNG_DELTA = 0.008;
+const mapProvider = Platform.OS === 'android' ? PROVIDER_GOOGLE : PROVIDER_DEFAULT;
 
 export default function MapScreen() {
   const colors = useColors();
-  const { booking, trips } = useBooking();
-  const activeTrip = trips[0];
-  return (
-    <View style={[styles.screen, { backgroundColor: '#dfeae3' }]}>
-      <View style={styles.mapSurface}>
-        <View style={[styles.mapBlob, styles.blobOne]} /><View style={[styles.mapBlob, styles.blobTwo]} /><View style={[styles.mapBlock, styles.blockOne]} /><View style={[styles.mapBlock, styles.blockTwo]} /><View style={[styles.mapBlock, styles.blockThree]} /><View style={[styles.mapBlock, styles.blockFour]} />
-        <View style={styles.roadA} /><View style={styles.roadB} /><View style={styles.roadC} />
-        <View style={styles.routeLine} />
-        <View style={[styles.mapMarker, { backgroundColor: colors.primary, left: '23%', top: '47%' }]}><Feather name="circle" size={13} color="#ffffff" /></View>
-        <View style={[styles.mapMarker, { backgroundColor: '#e49339', left: '68%', top: '26%' }]}><Feather name="map-pin" size={14} color="#ffffff" /></View>
-        <View style={[styles.carMarker, { backgroundColor: '#16362f', left: '47%', top: '38%' }]}><Feather name="truck" size={14} color="#ffffff" /></View>
-        <SafeAreaView style={styles.mapHeader} edges={['top']}><Pressable testID="back-map" onPress={() => router.back()} style={styles.mapButton}><Feather name="arrow-left" size={20} color="#16362f" /></Pressable><View style={styles.mapChip}><View style={styles.greenDot} /><Text style={styles.mapChipText}>Mapa simulado</Text></View><Pressable style={styles.mapButton}><Feather name="crosshair" size={18} color="#16362f" /></Pressable></SafeAreaView>
-        <View style={styles.mapHint}><Feather name="info" size={14} color={colors.primary} /><Text style={[styles.mapHintText, { color: colors.mutedForeground }]}>Lista para conectar Google Maps</Text></View>
+  const router = useRouter();
+  const { role } = useAuth();
+  const {
+    activeRide,
+    markArrivedPickup,
+    startTrip,
+    completeRide,
+    clearActiveRide,
+    publishDriverLocation,
+  } = useBooking();
+
+  const isDriver = role === 'driver';
+  const isPassenger = role === 'passenger';
+
+  const mapRef = useRef<MapView>(null);
+  const stepRef = useRef(0);
+  const pathRef = useRef<LatLng[]>([]);
+  const tripStartRef = useRef<Date | null>(null);
+
+  const pickupPoint: LatLng = useMemo(
+    () =>
+      activeRide
+        ? { latitude: activeRide.originLat, longitude: activeRide.originLng }
+        : DRIVER_NEARBY,
+    [activeRide],
+  );
+  const destinationPoint: LatLng = useMemo(
+    () =>
+      activeRide
+        ? { latitude: activeRide.destinationLat, longitude: activeRide.destinationLng }
+        : DRIVER_NEARBY,
+    [activeRide],
+  );
+
+  const [phase, setPhase] = useState<Phase>('loading');
+  const [stepIndex, setStepIndex] = useState(0);
+  const [followCamera, setFollowCamera] = useState(true);
+  const [showSummary, setShowSummary] = useState(false);
+  const [tripDurationSec, setTripDurationSec] = useState(0);
+  const [pickupPath, setPickupPath] = useState<LatLng[]>([]);
+  const [tripPath, setTripPath] = useState<LatLng[]>([]);
+  const [pickupOutline, setPickupOutline] = useState<LatLng[]>([]);
+  const [tripOutline, setTripOutline] = useState<LatLng[]>([]);
+  const [driverLive, setDriverLive] = useState<LatLng | null>(null);
+  const [driverStart, setDriverStart] = useState<LatLng>(DRIVER_NEARBY);
+
+  const originLabel = activeRide?.origin ?? 'Origen';
+  const destLabel = activeRide?.destination ?? 'Destino';
+  const fare = activeRide?.price ?? 0;
+  const earnings = activeRide?.net ?? 0;
+
+  const path = pathRef.current;
+  const totalSteps = Math.max(1, path.length - 1);
+  const carPosition = path[Math.min(stepIndex, Math.max(0, path.length - 1))] ?? pickupPoint;
+  const nextPos = path[Math.min(stepIndex + 1, Math.max(0, path.length - 1))] ?? carPosition;
+  const carHeading = bearingBetween(carPosition, nextPos);
+  const traveled = path.slice(0, Math.max(2, stepIndex + 1));
+  const progress = totalSteps ? stepIndex / totalSteps : 0;
+  const isMoving = phase === 'to_pickup' || phase === 'to_destination';
+  const remainingKm = path.length ? remainingDistanceKm(path, stepIndex).toFixed(2) : '—';
+  const activeOutline = phase === 'to_destination' || phase === 'done' ? tripOutline : pickupOutline;
+
+  const followCar = useCallback((center: LatLng, duration = STEP_MS) => {
+    mapRef.current?.animateToRegion(
+      {
+        latitude: center.latitude,
+        longitude: center.longitude,
+        latitudeDelta: LAT_DELTA,
+        longitudeDelta: LNG_DELTA,
+      },
+      duration,
+    );
+  }, []);
+
+  // Resolve driver GPS start (fallback nearby)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const { status } = await Location.requestForegroundPermissionsAsync();
+        if (status === 'granted') {
+          const loc = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+          if (!cancelled) {
+            setDriverStart({
+              latitude: loc.coords.latitude,
+              longitude: loc.coords.longitude,
+            });
+          }
+        }
+      } catch {
+        // keep default
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load OSRM routes for this ride
+  useEffect(() => {
+    if (!activeRide) return;
+    let cancelled = false;
+    setPhase('loading');
+    loadStreetRoutes(driverStart, pickupPoint, destinationPoint).then((routes) => {
+      if (cancelled) return;
+      setPickupPath(routes.pickupRoute);
+      setTripPath(routes.tripRoute);
+      setPickupOutline(routes.pickupOutline);
+      setTripOutline(routes.tripOutline);
+
+      const status = activeRide.status;
+      if (status === 'in_progress') {
+        pathRef.current = routes.tripRoute;
+        stepRef.current = 0;
+        setStepIndex(0);
+        setPhase('to_destination');
+        tripStartRef.current = new Date();
+      } else if (status === 'arrived_pickup') {
+        pathRef.current = routes.pickupRoute;
+        stepRef.current = Math.max(0, routes.pickupRoute.length - 1);
+        setStepIndex(Math.max(0, routes.pickupRoute.length - 1));
+        setPhase('arrived_pickup');
+      } else {
+        pathRef.current = routes.pickupRoute;
+        stepRef.current = 0;
+        setStepIndex(0);
+        setPhase('to_pickup');
+      }
+
+      mapRef.current?.fitToCoordinates(routes.pickupOutline.length > 1 ? routes.pickupOutline : routes.tripOutline, {
+        edgePadding: { top: 110, right: 40, bottom: 240, left: 40 },
+        animated: true,
+      });
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRide?.id, driverStart, destinationPoint, pickupPoint]);
+
+  // Passenger listens to driver GPS
+  useEffect(() => {
+    if (!isPassenger || !activeRide?.id) return;
+    fetchRideLocation(activeRide.id).then((loc) => {
+      if (loc) setDriverLive({ latitude: loc.lat, longitude: loc.lng });
+    });
+    const channel = subscribeRideLocation(activeRide.id, (loc) => {
+      setDriverLive({ latitude: loc.lat, longitude: loc.lng });
+    });
+    return () => {
+      channel.unsubscribe();
+    };
+  }, [activeRide?.id, isPassenger]);
+
+  // Sync passenger UI when ride status changes remotely
+  useEffect(() => {
+    if (!isPassenger || !activeRide) return;
+    if (activeRide.status === 'arrived_pickup') setPhase('arrived_pickup');
+    if (activeRide.status === 'in_progress' && tripPath.length) {
+      pathRef.current = tripPath;
+      stepRef.current = 0;
+      setStepIndex(0);
+      setPhase('to_destination');
+      tripStartRef.current = tripStartRef.current ?? new Date();
+    }
+    if (activeRide.status === 'completed') {
+      setPhase('done');
+      setShowSummary(true);
+    }
+  }, [activeRide, isPassenger, tripPath]);
+
+  // Animate along route + publish driver location
+  useEffect(() => {
+    if (!isMoving) return;
+
+    const timer = setInterval(() => {
+      const currentPath = pathRef.current;
+      if (currentPath.length < 2) return;
+      const max = currentPath.length - 1;
+      const next = stepRef.current + 1;
+
+      if (next >= max) {
+        clearInterval(timer);
+        stepRef.current = max;
+        setStepIndex(max);
+        if (followCamera) followCar(currentPath[max], 400);
+
+        if (phase === 'to_pickup') {
+          setPhase('arrived_pickup');
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+          if (isDriver) void markArrivedPickup();
+          return;
+        }
+
+        if (phase === 'to_destination') {
+          const end = new Date();
+          const start = tripStartRef.current ?? end;
+          setTripDurationSec(Math.max(1, Math.round((end.getTime() - start.getTime()) / 1000)));
+          setPhase('done');
+          setShowSummary(true);
+          void completeRide();
+          Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        }
+        return;
+      }
+
+      stepRef.current = next;
+      setStepIndex(next);
+      const pos = currentPath[next];
+      if (followCamera) followCar(pos, STEP_MS);
+      if (isDriver) {
+        void publishDriverLocation(pos.latitude, pos.longitude, bearingBetween(pos, currentPath[Math.min(next + 1, max)]));
+      }
+    }, STEP_MS);
+
+    return () => clearInterval(timer);
+  }, [
+    completeRide,
+    followCamera,
+    followCar,
+    isDriver,
+    isMoving,
+    markArrivedPickup,
+    phase,
+    publishDriverLocation,
+  ]);
+
+  const onArrivedConfirm = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await markArrivedPickup();
+    setPhase('arrived_pickup');
+  };
+
+  const onStartTrip = async () => {
+    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    await startTrip();
+    pathRef.current = tripPath;
+    stepRef.current = 0;
+    setStepIndex(0);
+    setFollowCamera(true);
+    setPhase('to_destination');
+    tripStartRef.current = new Date();
+    followCar(pickupPoint, 700);
+  };
+
+  const finish = async () => {
+    await clearActiveRide();
+    router.replace(isPassenger ? '/(tabs)' : '/driver');
+  };
+
+  const statusTitle =
+    phase === 'loading'
+      ? 'Cargando ruta...'
+      : phase === 'to_pickup'
+        ? isDriver
+          ? 'Navegando al punto de recogida'
+          : 'Conductor en camino'
+        : phase === 'arrived_pickup'
+          ? isDriver
+            ? 'Llegaste al pickup'
+            : 'Conductor en tu ubicación'
+          : phase === 'to_destination'
+            ? `En viaje · ${destLabel}`
+            : `${originLabel} → ${destLabel}`;
+
+  if (!activeRide) {
+    return (
+      <View style={[styles.loadingScreen, { backgroundColor: colors.background }]}>
+        <Text style={[styles.loadingText, { color: colors.foreground }]}>Sin viaje activo</Text>
+        <Pressable onPress={() => router.replace(isDriver ? '/driver' : '/(tabs)')} style={styles.backLink}>
+          <Text style={{ color: colors.primary, fontFamily: 'Inter_600SemiBold' }}>Volver</Text>
+        </Pressable>
       </View>
-      <LinearGradient colors={['rgba(246,251,248,0.4)', '#f6fbf8 23%']} style={styles.sheet}>
-        <View style={styles.handle} />
-        <Text style={[styles.sheetEyebrow, { color: colors.primary }]}>VIAJE CONFIRMADO</Text>
-        <Text style={[styles.sheetTitle, { color: colors.foreground }]}>Tu conductor va en camino</Text>
-        <View style={styles.driverRow}><View style={[styles.driverAvatar, { backgroundColor: colors.secondary }]}><Feather name="user" size={23} color={colors.primary} /></View><View style={styles.driverCopy}><Text style={[styles.driverName, { color: colors.foreground }]}>Mauricio Hernández</Text><View style={styles.rating}><Feather name="star" size={12} color="#e9a33f" /><Text style={[styles.ratingText, { color: colors.mutedForeground }]}>4.98 · Toyota Corolla verde</Text></View></View><View style={[styles.plate, { backgroundColor: colors.secondary }]}><Text style={[styles.plateText, { color: colors.primary }]}>NRA-218</Text></View></View>
-        <View style={[styles.routeSummary, { backgroundColor: colors.card, borderColor: colors.border }]}><View style={styles.routeDotColumn}><View style={[styles.routeDot, { backgroundColor: colors.primary }]} /><View style={[styles.routeDash, { borderColor: colors.border }]} /><View style={[styles.routeDot, { backgroundColor: '#e49339' }]} /></View><View style={styles.routeLabels}><Text style={[styles.routeText, { color: colors.foreground }]}>{activeTrip?.origin ?? booking.origin}</Text><Text style={[styles.routeText, { color: colors.foreground }]}>{activeTrip?.destination ?? booking.destination}</Text></View><View style={styles.routeTimes}><Text style={[styles.routeTime, { color: colors.mutedForeground }]}>Ahora</Text><Text style={[styles.routeTime, { color: colors.mutedForeground }]}>27 min</Text></View></View>
-        <View style={styles.sheetActions}><Pressable style={[styles.action, { backgroundColor: colors.secondary }]}><Feather name="phone" size={17} color={colors.primary} /><Text style={[styles.actionText, { color: colors.primary }]}>Llamar</Text></Pressable><Pressable style={[styles.action, { backgroundColor: colors.secondary }]}><Feather name="message-circle" size={17} color={colors.primary} /><Text style={[styles.actionText, { color: colors.primary }]}>Mensaje</Text></Pressable><Pressable onPress={() => router.replace('/(tabs)')} style={[styles.action, { backgroundColor: '#fff0ee' }]}><Feather name="x" size={17} color={colors.destructive} /><Text style={[styles.actionText, { color: colors.destructive }]}>Cancelar</Text></Pressable></View>
-      </LinearGradient>
+    );
+  }
+
+  if (phase === 'loading') {
+    return (
+      <View style={[styles.loadingScreen, { backgroundColor: colors.background }]}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={[styles.loadingText, { color: colors.foreground }]}>
+          Trazando ruta por las calles...
+        </Text>
+      </View>
+    );
+  }
+
+  const markerCar = isPassenger && driverLive ? driverLive : carPosition;
+
+  return (
+    <View style={styles.screen}>
+      <MapView
+        ref={mapRef}
+        style={styles.map}
+        provider={mapProvider}
+        mapType="standard"
+        initialRegion={{
+          latitude: pickupPoint.latitude,
+          longitude: pickupPoint.longitude,
+          latitudeDelta: 0.04,
+          longitudeDelta: 0.04,
+        }}
+        showsUserLocation={isDriver}
+        showsCompass={false}
+        showsMyLocationButton={false}
+        toolbarEnabled={false}
+        onPanDrag={() => {
+          if (isMoving) setFollowCamera(false);
+        }}
+      >
+        <Marker coordinate={pickupPoint} title="Pickup" description={originLabel} pinColor="green" />
+        <Marker coordinate={destinationPoint} title="Destino" description={destLabel} pinColor="red" />
+
+        {activeOutline.length > 1 ? (
+          <Polyline coordinates={activeOutline} strokeColor="rgba(19,138,104,0.28)" strokeWidth={7} />
+        ) : null}
+        {traveled.length > 1 ? (
+          <Polyline coordinates={traveled} strokeColor={colors.primary} strokeWidth={5} />
+        ) : null}
+
+        <Marker
+          coordinate={markerCar}
+          anchor={{ x: 0.5, y: 0.5 }}
+          flat
+          rotation={carHeading}
+          tracksViewChanges={false}
+        >
+          <View style={styles.carOuter}>
+            <View style={[styles.carInner, { backgroundColor: '#111b17' }]}>
+              <Feather name="navigation" size={18} color="#ffffff" />
+            </View>
+          </View>
+        </Marker>
+      </MapView>
+
+      <SafeAreaView style={styles.header} edges={['top']} pointerEvents="box-none">
+        <Pressable onPress={() => router.back()} style={styles.roundBtn}>
+          <Feather name="arrow-left" size={20} color={colors.foreground} />
+        </Pressable>
+        <View style={[styles.statusChip, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={[styles.statusDot, { backgroundColor: colors.primary }]} />
+          <Text style={[styles.statusText, { color: colors.foreground }]} numberOfLines={2}>
+            {statusTitle}
+          </Text>
+        </View>
+        {!followCamera && isMoving ? (
+          <Pressable
+            onPress={() => {
+              setFollowCamera(true);
+              followCar(carPosition, 500);
+            }}
+            style={styles.roundBtn}
+          >
+            <Feather name="crosshair" size={18} color={colors.primary} />
+          </Pressable>
+        ) : (
+          <View style={{ width: 44 }} />
+        )}
+      </SafeAreaView>
+
+      {!showSummary && (
+        <View style={styles.bottomPanel}>
+          {isMoving ? (
+            <View style={[styles.navCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <View style={styles.navTop}>
+                <View style={[styles.etaBadge, { backgroundColor: colors.secondary }]}>
+                  <Text style={[styles.etaValue, { color: colors.primary }]}>
+                    {Math.max(1, Math.ceil((1 - progress) * (phase === 'to_pickup' ? 5 : 12)))}
+                  </Text>
+                  <Text style={[styles.etaUnit, { color: colors.primary }]}>min</Text>
+                </View>
+                <View style={styles.navCopy}>
+                  <Text style={[styles.navTitle, { color: colors.foreground }]}>
+                    {phase === 'to_pickup' ? 'Ruta al pickup' : 'Ruta al destino'}
+                  </Text>
+                  <Text style={[styles.navSubtitle, { color: colors.mutedForeground }]}>
+                    {remainingKm} km · calles reales
+                  </Text>
+                </View>
+              </View>
+              <View style={[styles.progressTrack, { backgroundColor: colors.muted }]}>
+                <View
+                  style={[
+                    styles.progressFill,
+                    { backgroundColor: colors.primary, width: `${Math.round(progress * 100)}%` },
+                  ]}
+                />
+              </View>
+            </View>
+          ) : null}
+
+          {isDriver && phase === 'to_pickup' ? (
+            <Pressable
+              onPress={onArrivedConfirm}
+              style={[styles.cta, { backgroundColor: '#d88d2e' }]}
+            >
+              <Text style={styles.ctaTitle}>Llegué al punto</Text>
+            </Pressable>
+          ) : null}
+
+          {isDriver && phase === 'arrived_pickup' ? (
+            <Pressable onPress={onStartTrip} style={[styles.cta, { backgroundColor: colors.primary }]}>
+              <Text style={styles.ctaTitle}>Iniciar viaje</Text>
+            </Pressable>
+          ) : null}
+
+          {isPassenger && phase === 'arrived_pickup' ? (
+            <View style={[styles.navCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+              <Text style={[styles.navTitle, { color: colors.foreground }]}>
+                El conductor llegó. Esperando inicio del viaje…
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      )}
+
+      <RideNotice
+        visible={showSummary}
+        tone="success"
+        icon="check-circle"
+        eyebrow="VIAJE COMPLETADO"
+        title={isDriver ? 'Ganancia registrada' : 'Llegaste a tu destino'}
+        message={`${originLabel} → ${destLabel}`}
+        details={[
+          { label: isDriver ? 'Ganaste' : 'Pagaste', value: `$${(isDriver ? earnings : fare).toFixed(2)}` },
+          { label: 'Duración', value: `${tripDurationSec}s (demo)` },
+        ]}
+        primaryLabel="Listo"
+        onPrimary={finish}
+      />
     </View>
   );
 }
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  mapSurface: { flex: 1, overflow: 'hidden', position: 'relative' },
-  mapBlob: { backgroundColor: '#c9ddce', borderRadius: 150, opacity: 0.65, position: 'absolute' },
-  blobOne: { height: 260, left: -80, top: 70, width: 280 },
-  blobTwo: { height: 320, right: -130, top: 160, width: 320 },
-  mapBlock: { backgroundColor: '#edf5ed', borderRadius: 18, opacity: 0.9, position: 'absolute' },
-  blockOne: { height: 100, left: '6%', top: '18%', transform: [{ rotate: '16deg' }], width: 170 },
-  blockTwo: { height: 150, right: '1%', top: '12%', transform: [{ rotate: '-18deg' }], width: 180 },
-  blockThree: { bottom: '26%', height: 150, left: '12%', transform: [{ rotate: '-24deg' }], width: 150 },
-  blockFour: { bottom: '8%', height: 120, right: '4%', transform: [{ rotate: '22deg' }], width: 180 },
-  roadA: { backgroundColor: '#f7fbf6', height: 20, left: -40, position: 'absolute', top: '43%', transform: [{ rotate: '25deg' }], width: '130%' },
-  roadB: { backgroundColor: '#f7fbf6', height: 18, left: -30, position: 'absolute', top: '60%', transform: [{ rotate: '-30deg' }], width: '130%' },
-  roadC: { backgroundColor: '#f7fbf6', height: 15, left: '43%', position: 'absolute', top: -20, transform: [{ rotate: '65deg' }], width: 17 },
-  routeLine: { borderColor: '#138a68', borderRadius: 50, borderStyle: 'dashed', borderWidth: 3, height: 230, left: '33%', position: 'absolute', top: '24%', transform: [{ rotate: '33deg' }], width: 170 },
-  mapMarker: { alignItems: 'center', borderColor: '#ffffff', borderRadius: 20, borderWidth: 3, height: 34, justifyContent: 'center', position: 'absolute', width: 34 },
-  carMarker: { alignItems: 'center', borderColor: '#ffffff', borderRadius: 20, borderWidth: 3, height: 35, justifyContent: 'center', position: 'absolute', width: 35 },
-  mapHeader: { alignItems: 'center', flexDirection: 'row', justifyContent: 'space-between', left: 0, paddingHorizontal: 18, position: 'absolute', right: 0, top: 0 },
-  mapButton: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.86)', borderRadius: 14, height: 43, justifyContent: 'center', width: 43 },
-  mapChip: { alignItems: 'center', backgroundColor: 'rgba(255,255,255,0.86)', borderRadius: 100, flexDirection: 'row', gap: 7, paddingHorizontal: 13, paddingVertical: 9 },
-  greenDot: { backgroundColor: '#138a68', borderRadius: 4, height: 7, width: 7 },
-  mapChipText: { color: '#16362f', fontFamily: 'Inter_600SemiBold', fontSize: 11 },
-  mapHint: { alignItems: 'center', alignSelf: 'center', backgroundColor: 'rgba(255,255,255,0.78)', borderRadius: 100, bottom: 16, flexDirection: 'row', gap: 7, paddingHorizontal: 12, paddingVertical: 8, position: 'absolute' },
-  mapHintText: { fontFamily: 'Inter_500Medium', fontSize: 10 },
-  sheet: { borderTopLeftRadius: 29, borderTopRightRadius: 29, minHeight: 305, paddingHorizontal: 20, paddingTop: 13 },
-  handle: { alignSelf: 'center', backgroundColor: '#d0ded5', borderRadius: 4, height: 4, marginBottom: 18, width: 38 },
-  sheetEyebrow: { fontFamily: 'Inter_700Bold', fontSize: 10, letterSpacing: 1.5 },
-  sheetTitle: { fontFamily: 'Inter_700Bold', fontSize: 22, letterSpacing: -0.5, marginTop: 5 },
-  driverRow: { alignItems: 'center', flexDirection: 'row', gap: 11, marginTop: 17 },
-  driverAvatar: { alignItems: 'center', borderRadius: 23, height: 46, justifyContent: 'center', width: 46 },
-  driverCopy: { flex: 1, gap: 5 },
-  driverName: { fontFamily: 'Inter_700Bold', fontSize: 13 },
-  rating: { alignItems: 'center', flexDirection: 'row', gap: 5 },
-  ratingText: { fontFamily: 'Inter_400Regular', fontSize: 10 },
-  plate: { borderRadius: 8, paddingHorizontal: 8, paddingVertical: 6 },
-  plateText: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 0.7 },
-  routeSummary: { alignItems: 'center', borderRadius: 16, borderWidth: 1, flexDirection: 'row', gap: 12, marginTop: 17, padding: 13 },
-  routeDotColumn: { alignItems: 'center', height: 42, justifyContent: 'space-between', width: 9 },
-  routeDot: { borderRadius: 10, height: 8, width: 8 },
-  routeDash: { borderLeftWidth: 1, borderStyle: 'dashed', flex: 1 },
-  routeLabels: { flex: 1, gap: 14 },
-  routeText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
-  routeTimes: { alignItems: 'flex-end', gap: 14 },
-  routeTime: { fontFamily: 'Inter_500Medium', fontSize: 10 },
-  sheetActions: { flexDirection: 'row', gap: 8, marginTop: 13 },
-  action: { alignItems: 'center', borderRadius: 12, flex: 1, flexDirection: 'row', gap: 5, justifyContent: 'center', paddingVertical: 11 },
-  actionText: { fontFamily: 'Inter_600SemiBold', fontSize: 11 },
+  map: { ...StyleSheet.absoluteFillObject },
+  loadingScreen: { alignItems: 'center', flex: 1, gap: 12, justifyContent: 'center' },
+  loadingText: { fontFamily: 'Inter_600SemiBold', fontSize: 15 },
+  backLink: { marginTop: 8, padding: 12 },
+  header: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 10,
+    justifyContent: 'space-between',
+    paddingHorizontal: 14,
+    paddingTop: 4,
+  },
+  roundBtn: {
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    height: 44,
+    justifyContent: 'center',
+    width: 44,
+  },
+  statusChip: {
+    alignItems: 'center',
+    borderRadius: 16,
+    borderWidth: 1,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+  },
+  statusDot: { borderRadius: 4, height: 8, width: 8 },
+  statusText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  bottomPanel: { bottom: 28, gap: 10, left: 16, position: 'absolute', right: 16 },
+  navCard: { borderRadius: 18, borderWidth: 1, gap: 10, padding: 14 },
+  navTop: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  etaBadge: { alignItems: 'center', borderRadius: 14, paddingHorizontal: 10, paddingVertical: 8 },
+  etaValue: { fontFamily: 'Inter_700Bold', fontSize: 18 },
+  etaUnit: { fontFamily: 'Inter_600SemiBold', fontSize: 10 },
+  navCopy: { flex: 1, gap: 2 },
+  navTitle: { fontFamily: 'Inter_700Bold', fontSize: 14 },
+  navSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 12 },
+  progressTrack: { borderRadius: 4, height: 5, overflow: 'hidden' },
+  progressFill: { height: 5 },
+  cta: {
+    alignItems: 'center',
+    borderRadius: 16,
+    paddingVertical: 16,
+  },
+  ctaTitle: { color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 15 },
+  carOuter: {
+    alignItems: 'center',
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
+  },
+  carInner: {
+    alignItems: 'center',
+    borderRadius: 20,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
+  },
 });
