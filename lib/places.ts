@@ -104,3 +104,30 @@ export function estimateRouteKm(origin: string, destination: string) {
   const straight = haversineKm(from, to);
   return Math.max(2, Math.round(straight * 1.35 * 10) / 10);
 }
+
+export async function reverseGeocode(lat: number, lng: number): Promise<string> {
+  try {
+    const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lng}&zoom=18`;
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'inride-app/1.0 (com.inride.app)',
+      },
+    });
+    if (!res.ok) return '';
+    const data = (await res.json()) as {
+      name?: string;
+      display_name?: string;
+      address?: Record<string, string>;
+    };
+    const address = data.address ?? {};
+    const parts = [
+      address.road,
+      address.suburb || address.neighbourhood,
+      address.city || address.town || address.village,
+    ].filter(Boolean);
+    return parts.slice(0, 2).join(', ') || data.name || data.display_name || '';
+  } catch {
+    return '';
+  }
+}

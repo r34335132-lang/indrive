@@ -6,11 +6,13 @@ export type TariffConfig = {
   perKmApp: number;
   /** Precio por minuto de viaje. */
   perMinute: number;
+  /** Precio inicial que cobra el pasajero. El dueño lo define. */
+  baseFare: number;
   /** Cuota fija de la aplicación por viaje. */
   appFlatFee: number;
   /** Cobro por minuto de espera. */
   waitPerMinute: number;
-  /** Bloque / cargo de sistema. */
+  /** Bloque de sistema a cargo del conductor. No se suma al pasajero. */
   systemBlockFee: number;
   minDistanceKm: number;
   minFare: number;
@@ -32,11 +34,12 @@ export const DEFAULT_TARIFF: TariffConfig = {
   perKmDriver: 7,
   perKmApp: 3,
   perMinute: 3,
+  baseFare: 30,
   appFlatFee: 13.2,
   waitPerMinute: 1,
   systemBlockFee: 300,
   minDistanceKm: 2,
-  minFare: 35,
+  minFare: 30,
   airportTollTotal: 30,
   airportTollDriver: 22,
   airportTollApp: 8,
@@ -68,7 +71,9 @@ export type FareBreakdown = {
   distanceFare: number;
   timeFare: number;
   waitFare: number;
+  baseFare: number;
   appFlatFee: number;
+  /** A cargo del conductor. No forma parte del total del pasajero. */
   systemBlockFee: number;
   airportToll: number;
   total: number;
@@ -106,6 +111,8 @@ export function calculateFare(
   const billableKm = Math.max(distanceKm, tariff.minDistanceKm);
   const durationMinutes = options.durationMinutes ?? estimateDurationMinutes(billableKm);
   const waitMinutes = Math.max(0, options.waitMinutes ?? 0);
+  const startingPrice = Math.max(30, tariff.baseFare);
+  const lowestFare = Math.max(30, tariff.minFare);
 
   const surge =
     tariff.highDemandActive && tariff.surgeMultiplier > 1 ? tariff.surgeMultiplier : 1;
@@ -113,36 +120,32 @@ export function calculateFare(
   const rawDistanceFare = Math.max(billableKm * tariff.perKmTotal, 0);
   const rawTimeFare = durationMinutes * tariff.perMinute;
   const waitFare = waitMinutes * tariff.waitPerMinute;
+  const baseFare = startingPrice;
   const appFlatFee = tariff.appFlatFee;
   const systemBlockFee = tariff.systemBlockFee;
 
-  const preSurgeCore = rawDistanceFare + rawTimeFare;
+  const preSurgeCore = baseFare + rawDistanceFare + rawTimeFare;
   const distanceFare = Math.round(rawDistanceFare * surge * 100) / 100;
   const timeFare = Math.round(rawTimeFare * surge * 100) / 100;
 
   const airport = isAirportTrip(origin, destination);
   const airportToll = airport ? tariff.airportTollTotal : 0;
 
-  let subtotal =
-    distanceFare + timeFare + waitFare + appFlatFee + systemBlockFee + airportToll;
-  if (subtotal < tariff.minFare) {
-    subtotal = tariff.minFare;
+  let subtotal = baseFare + distanceFare + timeFare + waitFare + appFlatFee + airportToll;
+  if (subtotal < lowestFare) {
+    subtotal = lowestFare;
   }
 
-  const baseTotal =
-    preSurgeCore + waitFare + appFlatFee + systemBlockFee + airportToll;
+  const baseTotal = preSurgeCore + waitFare + appFlatFee + airportToll;
 
-  // Reparto: km conductor/app + tiempo y espera al conductor; cuota app + bloque al app; peaje según split
-  let driverNet =
-    billableKm * tariff.perKmDriver * surge + timeFare + waitFare;
-  let appNet = billableKm * tariff.perKmApp * surge + appFlatFee + systemBlockFee;
+  let driverNet = billableKm * tariff.perKmDriver * surge + timeFare + waitFare + baseFare;
+  let appNet = billableKm * tariff.perKmApp * surge + appFlatFee;
 
   if (airport) {
     driverNet += tariff.airportTollDriver;
     appNet += tariff.airportTollApp;
   }
 
-  // Ajuste si el mínimo empujó el total
   const splitSum = driverNet + appNet;
   if (splitSum > 0 && Math.abs(splitSum - subtotal) > 0.05) {
     const ratio = subtotal / splitSum;
@@ -158,6 +161,7 @@ export function calculateFare(
     distanceFare,
     timeFare,
     waitFare,
+    baseFare,
     appFlatFee,
     systemBlockFee,
     airportToll,

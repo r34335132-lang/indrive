@@ -58,6 +58,7 @@ type TariffDb = {
   per_km_driver: number;
   per_km_app: number;
   per_minute?: number | null;
+  base_fare?: number | null;
   app_flat_fee?: number | null;
   wait_per_minute?: number | null;
   system_block_fee?: number | null;
@@ -175,11 +176,12 @@ export function mapTariff(row: TariffDb): TariffRow {
     perKmDriver: Number(row.per_km_driver),
     perKmApp: Number(row.per_km_app),
     perMinute: Number(row.per_minute ?? 3),
+    baseFare: Number(row.base_fare ?? 30),
     appFlatFee: Number(row.app_flat_fee ?? 13.2),
     waitPerMinute: Number(row.wait_per_minute ?? 1),
     systemBlockFee: Number(row.system_block_fee ?? 300),
     minDistanceKm: Number(row.min_distance_km),
-    minFare: Number(row.min_fare),
+    minFare: Number(row.min_fare ?? 30),
     airportTollTotal: Number(row.airport_toll_total),
     airportTollDriver: Number(row.airport_toll_driver),
     airportTollApp: Number(row.airport_toll_app),

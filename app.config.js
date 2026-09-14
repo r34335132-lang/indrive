@@ -1,5 +1,3 @@
-const googleMapsApiKey = process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY ?? '';
-
 export default {
   expo: {
     name: 'inride',
@@ -26,22 +24,11 @@ export default {
         NSLocationAlwaysAndWhenInUseUsageDescription:
           'inride usa tu ubicación durante el viaje activo.',
       },
-      ...(googleMapsApiKey
-        ? {
-            config: {
-              googleMapsApiKey,
-            },
-          }
-        : {}),
     },
     android: {
       package: 'com.inride.app',
       permissions: ['ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION'],
-      config: {
-        googleMaps: {
-          apiKey: googleMapsApiKey,
-        },
-      },
+      softwareKeyboardLayoutMode: 'resize',
     },
     web: {
       favicon: './assets/images/icon.png',
@@ -49,7 +36,11 @@ export default {
     plugins: [
       'expo-router',
       'expo-font',
+      'expo-image',
+      'expo-splash-screen',
+      'expo-status-bar',
       'expo-web-browser',
+      '@maplibre/maplibre-react-native',
       [
         'expo-location',
         {
@@ -57,10 +48,16 @@ export default {
             'Permite a inride usar tu ubicación durante el viaje.',
         },
       ],
+      [
+        'expo-audio',
+        {
+          microphonePermission: false,
+          recordAudioAndroid: false,
+        },
+      ],
     ],
     experiments: {
       typedRoutes: true,
-      reactCompiler: true,
     },
     extra: {
       eas: {

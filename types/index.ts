@@ -1,3 +1,15 @@
+export type MapCoordinate = {
+  latitude: number;
+  longitude: number;
+};
+
+/** Ruta de conducción calculada con OSRM. */
+export type OsrmRoute = {
+  coordinates: MapCoordinate[];
+  distanceMeters: number;
+  durationSeconds: number;
+};
+
 export type UserRole = 'passenger' | 'driver' | 'admin';
 
 export type RideStatus =
@@ -111,6 +123,7 @@ export type TariffRow = {
   perKmDriver: number;
   perKmApp: number;
   perMinute: number;
+  baseFare: number;
   appFlatFee: number;
   waitPerMinute: number;
   systemBlockFee: number;

@@ -59,17 +59,23 @@ const TARIFF_SECTIONS: Array<{
       { key: 'perMinute', label: 'Precio por minuto', hint: '$3.00' },
       { key: 'waitPerMinute', label: 'Espera por minuto', hint: '$1.00' },
       { key: 'appFlatFee', label: 'Cuota fija app', hint: '$13.20' },
-      { key: 'systemBlockFee', label: 'Bloque de sistema', hint: '$300.00' },
     ],
   },
   {
-    title: 'Viaje mínimo',
-    subtitle: 'Mínimo 2 km / tarifa piso',
+    title: 'Precio inicial',
+    subtitle: 'Lo pone el dueño. La tarifa más baja puede ser $30',
     icon: 'minus-circle',
     fields: [
+      { key: 'baseFare', label: 'Precio inicial', hint: '$30.00' },
+      { key: 'minFare', label: 'Tarifa más baja', hint: '$30.00' },
       { key: 'minDistanceKm', label: 'Distancia mínima (km)', hint: '2 km' },
-      { key: 'minFare', label: 'Tarifa mínima', hint: '$35.00' },
     ],
+  },
+  {
+    title: 'Bloque de sistema · Conductor',
+    subtitle: 'Cargo del conductor. No se suma al precio del pasajero',
+    icon: 'shield',
+    fields: [{ key: 'systemBlockFee', label: 'Bloque de sistema', hint: '$300.00' }],
   },
   {
     title: 'Aeropuerto · Peaje',
@@ -179,7 +185,8 @@ export default function AdminScreen() {
     const value = Number.parseFloat(raw);
     if (Number.isNaN(value) || value < 0) return;
     if (key === 'surgeMultiplier' && value < 1) return;
-    await updateTariff({ [key]: value });
+    const next = key === 'baseFare' || key === 'minFare' ? Math.max(30, value) : value;
+    await updateTariff({ [key]: next });
     setDraft((current) => {
       const next = { ...current };
       delete next[key];
@@ -259,12 +266,12 @@ export default function AdminScreen() {
             <View style={[styles.tariffHero, { backgroundColor: '#16362f' }]}>
               <Text style={styles.tariffHeroTitle}>Tarifario INRIDE</Text>
               <Text style={styles.tariffHeroSub}>
-                Configura precios por km, tarifa mínima, peaje y demanda elevada
+                Precio inicial desde $30. El bloque de $300 es cargo del conductor
               </Text>
               <View style={styles.tariffHeroPills}>
-                <TariffHeroPill label="/ min" value={formatMoney(tariff.perMinute)} />
-                <TariffHeroPill label="Espera" value={formatMoney(tariff.waitPerMinute)} />
-                <TariffHeroPill label="Bloque" value={formatMoney(tariff.systemBlockFee)} />
+                <TariffHeroPill label="Inicial" value={formatMoney(tariff.baseFare)} />
+                <TariffHeroPill label="Más baja" value={formatMoney(tariff.minFare)} />
+                <TariffHeroPill label="Bloque cond." value={formatMoney(tariff.systemBlockFee)} />
               </View>
               <View style={[styles.tariffHeroPills, { marginTop: 8 }]}>
                 <TariffHeroPill label="Cuota app" value={formatMoney(tariff.appFlatFee)} />

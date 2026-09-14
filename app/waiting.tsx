@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { useRouter } from 'expo-router';
+import { useRouter, type Href } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
@@ -119,7 +119,7 @@ export default function WaitingScreen() {
         primaryLabel="Ver en el mapa"
         onPrimary={() => {
           setShowAccepted(false);
-          router.replace('/map');
+          router.replace('/ride-map' as Href);
         }}
       />
 

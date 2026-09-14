@@ -295,13 +295,14 @@ export default function BookScreen() {
                 </Text>
               </View>
               <Text style={[styles.fareBreakdown, { color: colors.mutedForeground }]}>
-                {fare.billableKm} km · {fare.durationMinutes} min · Distancia{' '}
-                {formatMoney(fare.distanceFare)} · Tiempo {formatMoney(fare.timeFare)}
+                {fare.billableKm} km · {fare.durationMinutes} min · Inicial{' '}
+                {formatMoney(fare.baseFare)} · Distancia {formatMoney(fare.distanceFare)} · Tiempo{' '}
+                {formatMoney(fare.timeFare)}
               </Text>
               <Text style={[styles.fareBreakdown, { color: colors.mutedForeground }]}>
-                Cuota app {formatMoney(fare.appFlatFee)} · Bloque sistema{' '}
-                {formatMoney(fare.systemBlockFee)}
+                Cuota app {formatMoney(fare.appFlatFee)}
                 {fare.waitFare > 0 ? ` · Espera ${formatMoney(fare.waitFare)}` : ''}
+                {fare.total <= tariff.minFare ? ` · Tarifa más baja ${formatMoney(tariff.minFare)}` : ''}
               </Text>
               {fare.isHighDemand ? (
                 <Text style={[styles.airportNote, { color: '#d88d2e' }]}>

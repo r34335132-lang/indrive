@@ -1,6 +1,6 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
-import { Redirect, useRouter } from 'expo-router';
+import { Redirect, useRouter, type Href } from 'expo-router';
 import { useMemo } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
@@ -111,6 +111,14 @@ export default function HomeScreen() {
               <Text style={styles.bookText}>Pedir viaje</Text>
               <Feather name="arrow-up-right" size={18} color="#ffffff" />
             </Pressable>
+            <Pressable
+              testID="open-map"
+              onPress={() => router.push('/map')}
+              style={({ pressed }) => [styles.mapLink, pressed && styles.pressed]}
+            >
+              <Feather name="map" size={16} color={colors.primary} />
+              <Text style={[styles.mapLinkText, { color: colors.primary }]}>Abrir mapa</Text>
+            </Pressable>
           </View>
         </LinearGradient>
 
@@ -135,7 +143,7 @@ export default function HomeScreen() {
         <View style={styles.section}>
           <SectionTitle title="Tu próximo viaje" action="Ver todos" />
           {upcoming ? (
-            <TripCard trip={upcoming} onPress={() => router.push('/map')} />
+            <TripCard trip={upcoming} onPress={() => router.push('/ride-map' as Href)} />
           ) : (
             <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Feather name="calendar" size={22} color={colors.primary} />
@@ -253,6 +261,15 @@ const styles = StyleSheet.create({
     paddingVertical: 14,
   },
   bookText: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 13 },
+  mapLink: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    marginTop: 10,
+    paddingVertical: 8,
+  },
+  mapLinkText: { fontFamily: 'Inter_700Bold', fontSize: 13 },
   pressed: { opacity: 0.78 },
   statsRow: { flexDirection: 'row', gap: 11 },
   stat: { borderRadius: 17, borderWidth: 1, flex: 1, gap: 4, padding: 14 },

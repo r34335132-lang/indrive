@@ -1,6 +1,6 @@
 import { Image, StyleSheet, View } from 'react-native';
 
-const logoSource = require('@/assets/images/inride-logo.png');
+const logoSource = require('@/assets/images/inride-logo.jpg');
 
 export function AppLogo({ large = false }: { light?: boolean; large?: boolean }) {
   return (

@@ -17,7 +17,7 @@ import { useAuth } from '@/context/AuthContext';
 import { useColors } from '@/hooks/useColors';
 import { DEMO_ACCOUNTS, isSupabaseConfigured } from '@/lib/supabase';
 
-const logoSource = require('@/assets/images/inride-logo.png');
+const logoSource = require('@/assets/images/inride-logo.jpg');
 
 export default function WelcomeScreen() {
   const colors = useColors();

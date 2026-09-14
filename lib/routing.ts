@@ -1,3 +1,5 @@
+import type { OsrmRoute } from '@/types';
+
 export type LatLng = { latitude: number; longitude: number };
 
 const FALLBACK_TRIP: LatLng[] = [
@@ -124,6 +126,40 @@ function straightFallback(from: LatLng, to: LatLng): LatLng[] {
     });
   }
   return points;
+}
+
+type OsrmResponse = {
+  code?: string;
+  routes?: Array<{
+    distance?: number;
+    duration?: number;
+    geometry?: { coordinates?: number[][] };
+  }>;
+};
+
+/** Calcula una ruta de manejo con OSRM (OpenStreetMap). No usa Google. */
+export async function getOsrmRoute(from: LatLng, to: LatLng): Promise<OsrmRoute | null> {
+  const url =
+    `https://router.project-osrm.org/route/v1/driving/` +
+    `${from.longitude},${from.latitude};${to.longitude},${to.latitude}` +
+    `?overview=full&geometries=geojson`;
+
+  try {
+    const response = await fetch(url);
+    if (!response.ok) return null;
+    const data = (await response.json()) as OsrmResponse;
+    const route = data.routes?.[0];
+    const coordinates = route?.geometry?.coordinates;
+    if (data.code !== 'Ok' || !route || !coordinates?.length) return null;
+
+    return {
+      coordinates: coordinates.map(([longitude, latitude]) => ({ latitude, longitude })),
+      distanceMeters: route.distance ?? 0,
+      durationSeconds: route.duration ?? 0,
+    };
+  } catch {
+    return null;
+  }
 }
 
 export async function fetchDrivingRoute(from: LatLng, to: LatLng): Promise<LatLng[]> {

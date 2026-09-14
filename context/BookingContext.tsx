@@ -58,6 +58,18 @@ type BookingState = {
   distanceKm: number;
 };
 
+export type MapRideRequest = {
+  origin: string;
+  destination: string;
+  originLat: number;
+  originLng: number;
+  destinationLat: number;
+  destinationLng: number;
+  distanceKm: number;
+  durationMinutes: number;
+  vehicle?: VehicleType;
+};
+
 type BookingContextValue = {
   booking: BookingState;
   trips: Trip[];
@@ -66,7 +78,7 @@ type BookingContextValue = {
   activeRide: ActiveRide | null;
   updateBooking: (values: Partial<BookingState>) => void;
   resetBooking: () => void;
-  requestRide: () => Promise<ActiveRide>;
+  requestRide: (input?: MapRideRequest) => Promise<ActiveRide>;
   acceptRideAsDriver: (rideId?: string) => Promise<void>;
   markEnRoutePickup: () => Promise<void>;
   markArrivedPickup: () => Promise<void>;
@@ -236,28 +248,39 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
 
   const resetBooking = () => setBooking(initialBooking);
 
-  const requestRide = useCallback(async () => {
+  const requestRide = useCallback(async (input?: MapRideRequest) => {
     if (!profile) throw new Error('Inicia sesión para pedir un viaje');
-    const originPlace = resolvePlace(booking.origin);
-    const destPlace = resolvePlace(booking.destination);
-    const distanceKm = booking.distanceKm || estimateRouteKm(booking.origin, booking.destination);
-    const fare = getFare(distanceKm, booking.origin, booking.destination);
+    const origin = input?.origin ?? booking.origin;
+    const destination = input?.destination ?? booking.destination;
+    const originPlace = input
+      ? { coordinate: { latitude: input.originLat, longitude: input.originLng } }
+      : resolvePlace(booking.origin);
+    const destPlace = input
+      ? { coordinate: { latitude: input.destinationLat, longitude: input.destinationLng } }
+      : resolvePlace(booking.destination);
+    const distanceKm = input?.distanceKm || booking.distanceKm || estimateRouteKm(origin, destination);
+    const durationMinutes = input?.durationMinutes;
+    const fare = getFare(distanceKm, origin, destination, { durationMinutes });
+    const vehicle = input?.vehicle ?? booking.vehicle;
+    const durationLabel = durationMinutes
+      ? `${Math.max(1, Math.round(durationMinutes))} min`
+      : durations[vehicle];
 
     const ride = await createRide({
       passenger: profile,
-      origin: booking.origin,
-      destination: booking.destination,
+      origin,
+      destination,
       originLat: originPlace.coordinate.latitude,
       originLng: originPlace.coordinate.longitude,
       destinationLat: destPlace.coordinate.latitude,
       destinationLng: destPlace.coordinate.longitude,
-      vehicle: booking.vehicle,
+      vehicle,
       price: fare.total,
       driverNet: fare.driverNet,
       appNet: fare.appNet,
       airportToll: fare.airportToll,
       distanceKm,
-      durationLabel: durations[booking.vehicle],
+      durationLabel,
       scheduledDate: booking.date,
       scheduledTime: booking.time,
     });

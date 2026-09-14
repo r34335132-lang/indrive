@@ -1,7 +1,7 @@
 import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
-import { Redirect, useRouter } from 'expo-router';
+import { Redirect, type Href, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Animated,
@@ -16,10 +16,14 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppLogo } from '@/components/AppLogo';
 import { RideNotice } from '@/components/RideNotice';
+import { RideChatButton } from '@/components/RideChatSheet';
 import { TripCard } from '@/components/TripCard';
+import { formatMoney } from '@/constants/pricing';
 import { useAuth } from '@/context/AuthContext';
 import { useBooking } from '@/context/BookingContext';
+import { useTariff } from '@/context/TariffContext';
 import { useColors } from '@/hooks/useColors';
+import { playNewRideChime } from '@/lib/newRideSound';
 import type { Ride } from '@/types';
 
 export default function DriverScreen() {
@@ -27,6 +31,7 @@ export default function DriverScreen() {
   const router = useRouter();
   const { user, logout, docsComplete, isReady, role } = useAuth();
   const { trips, openRides, acceptRideAsDriver, activeRide } = useBooking();
+  const { tariff } = useTariff();
 
   const [selected, setSelected] = useState<Ride | null>(null);
   const [showOfferModal, setShowOfferModal] = useState(false);
@@ -87,7 +92,8 @@ export default function DriverScreen() {
     if (!offer || notifiedId.current === offer.id) return;
     notifiedId.current = offer.id;
     setSelected(offer);
-    Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning);
+    void playNewRideChime();
     setShowNewTripNotice(true);
   }, [offer]);
 
@@ -102,7 +108,7 @@ export default function DriverScreen() {
       await acceptRideAsDriver(selected?.id ?? offer?.id);
       setShowOfferModal(false);
       setShowNewTripNotice(false);
-      router.push('/map');
+      router.push('/ride-map' as Href);
     } catch (e) {
       console.warn(e);
     }
@@ -157,6 +163,9 @@ export default function DriverScreen() {
             <Text style={[styles.statValue, { color: colors.foreground }]}>
               ${weekEarnings.toFixed(0)}
             </Text>
+            <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>
+              Bloque {formatMoney(tariff.systemBlockFee)} a tu cargo
+            </Text>
           </View>
           <View style={[styles.statCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
             <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>RATING</Text>
@@ -166,16 +175,23 @@ export default function DriverScreen() {
           </View>
         </View>
 
-        {live ? (
-          <Pressable
-            onPress={() => router.push('/map')}
-            style={[styles.alertCard, { backgroundColor: colors.secondary, borderColor: colors.primary }]}
-          >
-            <Text style={[styles.alertTitle, { color: colors.foreground }]}>Viaje activo</Text>
-            <Text style={[styles.alertSubtitle, { color: colors.mutedForeground }]}>
-              {live.origin} → {live.destination} · toca para abrir mapa
-            </Text>
-          </Pressable>
+        {live && user ? (
+          <View style={styles.liveRow}>
+            <Pressable
+              onPress={() => router.push('/ride-map' as Href)}
+              style={[styles.alertCard, styles.liveCard, { backgroundColor: colors.secondary, borderColor: colors.primary }]}
+            >
+              <Text style={[styles.alertTitle, { color: colors.foreground }]}>Viaje activo</Text>
+              <Text style={[styles.alertSubtitle, { color: colors.mutedForeground }]}>
+                {live.origin} → {live.destination} · toca para abrir mapa
+              </Text>
+            </Pressable>
+            <RideChatButton
+              rideId={live.id}
+              meId={user.id}
+              peerName={live.passengerName || 'Pasajero'}
+            />
+          </View>
         ) : null}
 
         {current ? (
@@ -279,6 +295,12 @@ export default function DriverScreen() {
                   value={`$${Number(current?.driverNet ?? 0).toFixed(2)}`}
                   colors={colors}
                   highlight
+                />
+                <InfoRow
+                  icon="shield"
+                  label="Bloque de sistema"
+                  value={`${formatMoney(tariff.systemBlockFee)} · lo cubre el conductor`}
+                  colors={colors}
                 />
               </View>
 
@@ -414,6 +436,8 @@ const styles = StyleSheet.create({
   statLabel: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1 },
   statValue: { fontFamily: 'Inter_700Bold', fontSize: 22 },
   alertCard: { borderRadius: 20, borderWidth: 1.5, gap: 6, padding: 16 },
+  liveRow: { alignItems: 'center', flexDirection: 'row', gap: 10 },
+  liveCard: { flex: 1 },
   alertHeader: { alignItems: 'center', flexDirection: 'row', gap: 12 },
   alertBadgeWrap: {
     alignItems: 'center',
