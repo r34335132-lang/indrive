@@ -3,11 +3,25 @@ export type MapCoordinate = {
   longitude: number;
 };
 
+/** Paso de navegación (giro / continuar). */
+export type OsrmStep = {
+  instruction: string;
+  shortInstruction: string;
+  streetName: string;
+  distanceMeters: number;
+  durationSeconds: number;
+  type: string;
+  modifier: string;
+  location: MapCoordinate;
+  bearingAfter: number;
+};
+
 /** Ruta de conducción calculada con OSRM. */
 export type OsrmRoute = {
   coordinates: MapCoordinate[];
   distanceMeters: number;
   durationSeconds: number;
+  steps?: OsrmStep[];
 };
 
 export type UserRole = 'passenger' | 'driver' | 'admin';
@@ -24,7 +38,7 @@ export type RideStatus =
 
 export type TripStatus = 'Confirmado' | 'En camino' | 'Completado';
 
-export type VehicleType = 'Económico' | 'Comfort' | 'Premium' | 'Van';
+export type VehicleType = 'Sedan' | 'SUV';
 
 export type DriverDocumentKey =
   | 'ineFront'
@@ -51,9 +65,18 @@ export type Profile = {
   vehicleModel?: string;
   vehicleColor?: string;
   vehiclePlate?: string;
+  /** Ya cubrió el bloque de sistema ($300) por depósito o ganancias. */
+  blockFeeSatisfied?: boolean;
 };
 
-export type DriverDocs = Record<DriverDocumentKey, boolean> & { complete?: boolean };
+export type DriverDocs = Record<DriverDocumentKey, boolean> & {
+  complete?: boolean;
+  reviewStatus?: 'pending' | 'approved' | 'rejected';
+  reviewNote?: string | null;
+};
+
+export type PaymentMethod = 'cash' | 'card';
+export type PaymentStatus = 'none' | 'pending' | 'approved' | 'rejected' | 'refunded' | 'cancelled';
 
 export type Ride = {
   id: string;
@@ -83,6 +106,11 @@ export type Ride = {
   comment: string | null;
   scheduledDate: string | null;
   scheduledTime: string | null;
+  paymentMethod: PaymentMethod;
+  paymentStatus: PaymentStatus;
+  mpPreferenceId: string | null;
+  mpPaymentId: string | null;
+  paidAt: string | null;
   createdAt: string;
   updatedAt: string;
 };
@@ -101,6 +129,7 @@ export type Trip = {
   destination: string;
   date: string;
   time: string;
+  createdAt: string;
   vehicle: VehicleType;
   price: number;
   driverNet: number;
@@ -115,6 +144,8 @@ export type Trip = {
   role: 'passenger' | 'driver';
   passengerName: string;
   driverName: string;
+  paymentMethod?: PaymentMethod;
+  paymentStatus?: PaymentStatus;
 };
 
 export type TariffRow = {

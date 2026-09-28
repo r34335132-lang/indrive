@@ -1,5 +1,5 @@
 import { mapDocs, mapProfile } from '@/lib/api/mappers';
-import { DEMO_ACCOUNTS, supabase } from '@/lib/supabase';
+import { supabase } from '@/lib/supabase';
 import type { DriverDocs, Profile, UserRole } from '@/types';
 
 const emptyDocs: DriverDocs = {
@@ -9,6 +9,8 @@ const emptyDocs: DriverDocs = {
   circulation: false,
   insurance: false,
   complete: false,
+  reviewStatus: 'pending',
+  reviewNote: null,
 };
 
 export async function fetchProfile(userId: string): Promise<Profile | null> {
@@ -84,58 +86,6 @@ export async function setAllDriverDocsUploaded(userId: string): Promise<DriverDo
   });
 }
 
-type DemoKey = keyof typeof DEMO_ACCOUNTS;
-
-const DEMO_META: Record<
-  DemoKey,
-  Record<string, string | number | boolean | string[]>
-> = {
-  passenger: {
-    name: 'Sofía García',
-    first_name: 'Sofía',
-    phone: '+52 618 123 4567',
-    city: 'Durango, Dgo.',
-    initials: 'SG',
-    rating: 4.92,
-    total_trips: 48,
-    member_since: '2024',
-    bio: 'Pasajera frecuente en Durango',
-    roles: ['passenger', 'admin'],
-    active_role: 'passenger',
-  },
-  driver: {
-    name: 'Mauricio Hernández',
-    first_name: 'Mauricio',
-    phone: '+52 618 987 6543',
-    city: 'Durango, Dgo.',
-    initials: 'MH',
-    rating: 4.98,
-    total_trips: 312,
-    member_since: '2023',
-    bio: 'Toyota Corolla · NRA-218',
-    roles: ['driver'],
-    active_role: 'driver',
-    vehicle_make: 'Toyota',
-    vehicle_model: 'Corolla',
-    vehicle_color: 'verde',
-    vehicle_plate: 'NRA-218',
-    docs_complete: true,
-  },
-  admin: {
-    name: 'Admin INRIDE',
-    first_name: 'Admin',
-    phone: '+52 618 000 0000',
-    city: 'Durango, Dgo.',
-    initials: 'AD',
-    rating: 5,
-    total_trips: 0,
-    member_since: '2024',
-    bio: 'Panel de control y tarifario',
-    roles: ['admin'],
-    active_role: 'admin',
-  },
-};
-
 export async function loginWithPassword(email: string, password: string) {
   const { data, error } = await supabase.auth.signInWithPassword({ email, password });
   if (error) throw error;
@@ -173,7 +123,7 @@ export async function registerPassenger(input: RegisterPassengerInput) {
     name,
     first_name: firstName,
     phone: input.phone.trim(),
-    city: input.city?.trim() || 'Durango, Dgo.',
+    city: input.city?.trim() || 'La Laguna',
     initials: initialsFromName(name),
     roles: ['passenger'],
     active_role: 'passenger',
@@ -203,7 +153,7 @@ export async function registerPassenger(input: RegisterPassengerInput) {
         name,
         first_name: firstName,
         phone: input.phone.trim(),
-        city: input.city?.trim() || 'Durango, Dgo.',
+        city: input.city?.trim() || 'La Laguna',
         initials: initialsFromName(name),
         roles: ['passenger'],
         active_role: 'passenger',
@@ -224,7 +174,7 @@ export async function registerDriver(input: RegisterDriverInput) {
     name,
     first_name: firstName,
     phone: input.phone.trim(),
-    city: input.city?.trim() || 'Durango, Dgo.',
+    city: input.city?.trim() || 'La Laguna',
     initials: initialsFromName(name),
     roles: ['driver'],
     active_role: 'driver',
@@ -262,7 +212,7 @@ export async function registerDriver(input: RegisterDriverInput) {
         name,
         first_name: firstName,
         phone: input.phone.trim(),
-        city: input.city?.trim() || 'Durango, Dgo.',
+        city: input.city?.trim() || 'La Laguna',
         initials: initialsFromName(name),
         roles: ['driver'],
         active_role: 'driver',
@@ -286,61 +236,6 @@ export async function registerDriver(input: RegisterDriverInput) {
   }
 
   return sessionData;
-}
-
-export async function loginAsDemo(key: DemoKey) {
-  const account = DEMO_ACCOUNTS[key];
-  const meta = DEMO_META[key];
-
-  const signedIn = await supabase.auth.signInWithPassword({
-    email: account.email,
-    password: account.password,
-  });
-
-  if (!signedIn.error && signedIn.data.session) {
-    // Ensure role/docs for existing accounts
-    const userId = signedIn.data.user!.id;
-    await supabase
-      .from('profiles')
-      .update({
-        name: String(meta.name),
-        first_name: String(meta.first_name),
-        phone: String(meta.phone),
-        roles: meta.roles as UserRole[],
-        active_role: meta.active_role as UserRole,
-        bio: meta.bio ? String(meta.bio) : null,
-        vehicle_make: meta.vehicle_make ? String(meta.vehicle_make) : null,
-        vehicle_model: meta.vehicle_model ? String(meta.vehicle_model) : null,
-        vehicle_color: meta.vehicle_color ? String(meta.vehicle_color) : null,
-        vehicle_plate: meta.vehicle_plate ? String(meta.vehicle_plate) : null,
-        rating: Number(meta.rating ?? 5),
-        total_trips: Number(meta.total_trips ?? 0),
-        initials: String(meta.initials ?? 'IR'),
-      })
-      .eq('id', userId);
-
-    if (key === 'driver') {
-      await setAllDriverDocsUploaded(userId);
-    }
-    return signedIn.data;
-  }
-
-  const { data, error } = await supabase.auth.signUp({
-    email: account.email,
-    password: account.password,
-    options: { data: meta },
-  });
-  if (error) throw error;
-  if (!data.session) {
-    // Email confirm may be required — try sign-in again
-    const again = await supabase.auth.signInWithPassword({
-      email: account.email,
-      password: account.password,
-    });
-    if (again.error) throw again.error;
-    return again.data;
-  }
-  return data;
 }
 
 export async function logoutSession() {

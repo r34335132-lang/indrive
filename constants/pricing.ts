@@ -29,25 +29,26 @@ export type TariffConfig = {
   surgeMultiplier: number;
 };
 
+/** Tarifas accesibles para La Laguna (Torreón / Gómez / Lerdo). */
 export const DEFAULT_TARIFF: TariffConfig = {
-  perKmTotal: 10,
-  perKmDriver: 7,
-  perKmApp: 3,
-  perMinute: 3,
-  baseFare: 30,
-  appFlatFee: 13.2,
+  perKmTotal: 5.5,
+  perKmDriver: 4,
+  perKmApp: 1.5,
+  perMinute: 1.2,
+  baseFare: 25,
+  appFlatFee: 5,
   waitPerMinute: 1,
   systemBlockFee: 300,
-  minDistanceKm: 2,
-  minFare: 30,
-  airportTollTotal: 30,
-  airportTollDriver: 22,
-  airportTollApp: 8,
-  bonusGo: 1000,
-  bonusPlus: 2000,
-  bonusMaster: 3000,
-  highDemandActive: true,
-  surgeMultiplier: 1.4,
+  minDistanceKm: 1.5,
+  minFare: 35,
+  airportTollTotal: 20,
+  airportTollDriver: 15,
+  airportTollApp: 5,
+  bonusGo: 500,
+  bonusPlus: 1000,
+  bonusMaster: 1500,
+  highDemandActive: false,
+  surgeMultiplier: 1.2,
 };
 
 export const DRIVER_TIER_LABELS: Record<DriverTier, string> = {
@@ -61,6 +62,8 @@ export type FareOptions = {
   durationMinutes?: number;
   /** Minutos de espera del conductor. */
   waitMinutes?: number;
+  /** Sedan = tarifa base; SUV = +20%. */
+  vehicle?: 'Sedan' | 'SUV';
 };
 
 export type FareBreakdown = {
@@ -83,16 +86,17 @@ export type FareBreakdown = {
   isHighDemand: boolean;
   surgeMultiplier: number;
   baseTotal: number;
+  vehicle: 'Sedan' | 'SUV';
 };
 
 export function isAirportTrip(origin: string, destination: string) {
   const text = `${origin} ${destination}`.toLowerCase();
-  return text.includes('aeropuerto') || text.includes('airport');
+  return text.includes('aeropuerto') || text.includes('airport') || text.includes('sarabia');
 }
 
-/** Estima minutos de viaje a partir de km (~24 km/h urbano). */
+/** Estima minutos de viaje a partir de km (~28 km/h urbano Laguna). */
 export function estimateDurationMinutes(distanceKm: number) {
-  return Math.max(5, Math.round(distanceKm * 2.5));
+  return Math.max(5, Math.round(distanceKm * 2.1));
 }
 
 export function getDriverTierBonus(tier: DriverTier, tariff: TariffConfig = DEFAULT_TARIFF) {
@@ -100,6 +104,12 @@ export function getDriverTierBonus(tier: DriverTier, tariff: TariffConfig = DEFA
   if (tier === 'plus') return tariff.bonusPlus;
   return tariff.bonusGo;
 }
+
+/** Multiplicador sobre la tarifa según tipo de vehículo (precios base Laguna). */
+export const VEHICLE_MULTIPLIER: Record<'Sedan' | 'SUV', number> = {
+  Sedan: 1,
+  SUV: 1.2,
+};
 
 export function calculateFare(
   distanceKm: number,
@@ -111,8 +121,8 @@ export function calculateFare(
   const billableKm = Math.max(distanceKm, tariff.minDistanceKm);
   const durationMinutes = options.durationMinutes ?? estimateDurationMinutes(billableKm);
   const waitMinutes = Math.max(0, options.waitMinutes ?? 0);
-  const startingPrice = Math.max(30, tariff.baseFare);
-  const lowestFare = Math.max(30, tariff.minFare);
+  const startingPrice = Math.max(0, tariff.baseFare);
+  const lowestFare = Math.max(startingPrice, tariff.minFare);
 
   const surge =
     tariff.highDemandActive && tariff.surgeMultiplier > 1 ? tariff.surgeMultiplier : 1;
@@ -130,13 +140,16 @@ export function calculateFare(
 
   const airport = isAirportTrip(origin, destination);
   const airportToll = airport ? tariff.airportTollTotal : 0;
+  const vehicle = options.vehicle === 'SUV' ? 'SUV' : 'Sedan';
+  const vehicleMult = VEHICLE_MULTIPLIER[vehicle];
 
   let subtotal = baseFare + distanceFare + timeFare + waitFare + appFlatFee + airportToll;
   if (subtotal < lowestFare) {
     subtotal = lowestFare;
   }
+  subtotal = Math.round(subtotal * vehicleMult * 100) / 100;
 
-  const baseTotal = preSurgeCore + waitFare + appFlatFee + airportToll;
+  const baseTotal = Math.round((preSurgeCore + waitFare + appFlatFee + airportToll) * vehicleMult * 100) / 100;
 
   let driverNet = billableKm * tariff.perKmDriver * surge + timeFare + waitFare + baseFare;
   let appNet = billableKm * tariff.perKmApp * surge + appFlatFee;
@@ -145,6 +158,9 @@ export function calculateFare(
     driverNet += tariff.airportTollDriver;
     appNet += tariff.airportTollApp;
   }
+
+  driverNet *= vehicleMult;
+  appNet *= vehicleMult;
 
   const splitSum = driverNet + appNet;
   if (splitSum > 0 && Math.abs(splitSum - subtotal) > 0.05) {
@@ -158,20 +174,21 @@ export function calculateFare(
     billableKm,
     durationMinutes,
     waitMinutes,
-    distanceFare,
-    timeFare,
-    waitFare,
-    baseFare,
-    appFlatFee,
+    distanceFare: Math.round(distanceFare * vehicleMult * 100) / 100,
+    timeFare: Math.round(timeFare * vehicleMult * 100) / 100,
+    waitFare: Math.round(waitFare * vehicleMult * 100) / 100,
+    baseFare: Math.round(baseFare * vehicleMult * 100) / 100,
+    appFlatFee: Math.round(appFlatFee * vehicleMult * 100) / 100,
     systemBlockFee,
-    airportToll,
-    total: Math.round(subtotal * 100) / 100,
+    airportToll: Math.round(airportToll * vehicleMult * 100) / 100,
+    total: subtotal,
     driverNet: Math.round(driverNet * 100) / 100,
     appNet: Math.round(appNet * 100) / 100,
     isAirport: airport,
     isHighDemand: surge > 1,
     surgeMultiplier: surge,
-    baseTotal: Math.round(baseTotal * 100) / 100,
+    baseTotal,
+    vehicle,
   };
 }
 
@@ -181,13 +198,12 @@ export function formatMoney(amount?: number | null) {
 }
 
 const ROUTE_DISTANCES: Array<{ match: RegExp; km: number }> = [
-  { match: /aeropuerto/i, km: 18.4 },
-  { match: /hospital/i, km: 6.8 },
-  { match: /centro comercial/i, km: 5.1 },
-  { match: /parque guadiana/i, km: 4.2 },
-  { match: /jardines/i, km: 3.9 },
-  { match: /tec nm/i, km: 7.2 },
-  { match: /gobernador/i, km: 4.8 },
+  { match: /aeropuerto|sarabia/i, km: 8.5 },
+  { match: /galer[ií]as/i, km: 6.2 },
+  { match: /g[oó]mez/i, km: 7.8 },
+  { match: /lerdo/i, km: 9.5 },
+  { match: /cuatro caminos/i, km: 4.5 },
+  { match: /hospital/i, km: 5.2 },
 ];
 
 export function estimateDistanceKm(origin: string, destination: string) {
@@ -195,5 +211,5 @@ export function estimateDistanceKm(origin: string, destination: string) {
   for (const route of ROUTE_DISTANCES) {
     if (route.match.test(text)) return route.km;
   }
-  return 4.2;
+  return 5.5;
 }

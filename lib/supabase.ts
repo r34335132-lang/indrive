@@ -30,23 +30,3 @@ function createSupabaseClient() {
 }
 
 export const supabase = createSupabaseClient();
-
-export const DEMO_PASSWORD = 'InrideDemo1!';
-
-export const DEMO_ACCOUNTS = {
-  passenger: {
-    email: 'sofia@inride.app',
-    password: DEMO_PASSWORD,
-    label: 'Sofía · Pasajera',
-  },
-  driver: {
-    email: 'mauricio@inride.app',
-    password: DEMO_PASSWORD,
-    label: 'Mauricio · Conductor',
-  },
-  admin: {
-    email: 'admin@inride.app',
-    password: DEMO_PASSWORD,
-    label: 'Admin INRIDE',
-  },
-} as const;

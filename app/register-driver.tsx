@@ -2,16 +2,21 @@ import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LegalLinks } from '@/components/LegalLinks';
 import { DRIVER_DOCUMENTS } from '@/constants/mocks';
 import { useAuth } from '@/context/AuthContext';
 import { useColors } from '@/hooks/useColors';
+import type { DriverDocumentKey } from '@/types';
 
 export default function RegisterDriverScreen() {
   const colors = useColors();
   const router = useRouter();
-  const { driverDocs, docsComplete, toggleDocument, setAllDocumentsUploaded, logout } = useAuth();
+  const { user, driverDocs, docsComplete, uploadDocument, logout } = useAuth();
+  const [busyKey, setBusyKey] = useState<DriverDocumentKey | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   const uploadedCount = (['ineFront', 'ineBack', 'license', 'circulation', 'insurance'] as const).filter(
     (k) => driverDocs[k],
@@ -26,9 +31,20 @@ export default function RegisterDriverScreen() {
     router.replace('/driver');
   };
 
-  const mockUploadAll = async () => {
-    Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
-    await setAllDocumentsUploaded();
+  const onUpload = async (key: DriverDocumentKey) => {
+    if (!user) return;
+    setError(null);
+    setBusyKey(key);
+    try {
+      Haptics.selectionAsync();
+      await uploadDocument(key);
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : 'No se pudo subir';
+      if (msg !== 'CANCELLED') setError(msg);
+    } finally {
+      setBusyKey(null);
+    }
   };
 
   return (
@@ -54,8 +70,9 @@ export default function RegisterDriverScreen() {
         <LinearGradient colors={['#16362f', '#138a68']} style={styles.banner}>
           <Text style={styles.bannerTitle}>Verificación inride</Text>
           <Text style={styles.bannerCopy}>
-            Marca cada documento como cargado para activar el modo conductor. Luego podrás recibir
-            viajes en tiempo real.
+            Sube fotos claras de tus documentos. Podrás trabajar en cuanto completes la carga; el
+            equipo los revisa después. Tus archivos se guardan de forma privada y solo se usan para
+            verificación.
           </Text>
           <View style={styles.progressRow}>
             <View style={styles.progressTrack}>
@@ -63,19 +80,21 @@ export default function RegisterDriverScreen() {
             </View>
             <Text style={styles.progressText}>{uploadedCount}/5</Text>
           </View>
+          <Text style={styles.reviewHint}>
+            Estado revisión: {driverDocs.reviewStatus === 'approved' ? 'Aprobado' : 'Pendiente'}
+          </Text>
         </LinearGradient>
 
         <View style={styles.list}>
           {DRIVER_DOCUMENTS.map((doc) => {
             const done = driverDocs[doc.key];
+            const loading = busyKey === doc.key;
             return (
               <Pressable
                 key={doc.key}
                 testID={`doc-${doc.key}`}
-                onPress={async () => {
-                  Haptics.selectionAsync();
-                  await toggleDocument(doc.key);
-                }}
+                disabled={Boolean(busyKey)}
+                onPress={() => void onUpload(doc.key)}
                 style={({ pressed }) => [
                   styles.docCard,
                   {
@@ -91,12 +110,16 @@ export default function RegisterDriverScreen() {
                     { backgroundColor: done ? colors.primary : colors.muted },
                   ]}
                 >
-                  <Feather name={doc.icon} size={18} color={done ? '#ffffff' : colors.primary} />
+                  {loading ? (
+                    <ActivityIndicator color={done ? '#fff' : colors.primary} />
+                  ) : (
+                    <Feather name={doc.icon} size={18} color={done ? '#ffffff' : colors.primary} />
+                  )}
                 </View>
                 <View style={styles.docCopy}>
                   <Text style={[styles.docTitle, { color: colors.foreground }]}>{doc.title}</Text>
                   <Text style={[styles.docSubtitle, { color: colors.mutedForeground }]}>
-                    {doc.subtitle}
+                    {done ? 'Subido · toca para reemplazar' : doc.subtitle}
                   </Text>
                 </View>
                 <View
@@ -108,22 +131,14 @@ export default function RegisterDriverScreen() {
                     },
                   ]}
                 >
-                  {done ? <Feather name="check" size={14} color="#ffffff" /> : null}
+                  {done ? <Feather name="check" size={14} color="#ffffff" /> : <Feather name="upload" size={14} color={colors.mutedForeground} />}
                 </View>
               </Pressable>
             );
           })}
         </View>
 
-        <Pressable
-          onPress={mockUploadAll}
-          style={[styles.secondaryBtn, { borderColor: colors.border, backgroundColor: colors.card }]}
-        >
-          <Feather name="upload" size={16} color={colors.primary} />
-          <Text style={[styles.secondaryBtnText, { color: colors.primary }]}>
-            Simular carga de todos los documentos
-          </Text>
-        </Pressable>
+        {error ? <Text style={styles.error}>{error}</Text> : null}
 
         <Pressable
           testID="finish-driver-register"
@@ -142,10 +157,12 @@ export default function RegisterDriverScreen() {
             style={styles.primaryBtn}
           >
             <Text style={styles.primaryBtnText}>
-              {docsComplete ? 'Continuar al centro del conductor' : 'Completa los 5 documentos'}
+              {docsComplete ? 'Continuar al centro del conductor' : 'Sube los 5 documentos'}
             </Text>
           </LinearGradient>
         </Pressable>
+
+        <LegalLinks tone="muted" center />
       </ScrollView>
     </SafeAreaView>
   );
@@ -174,6 +191,7 @@ const styles = StyleSheet.create({
   banner: { borderRadius: 22, gap: 8, overflow: 'hidden', padding: 18 },
   bannerTitle: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 18 },
   bannerCopy: { color: '#c5edda', fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 18 },
+  reviewHint: { color: '#b9ead0', fontFamily: 'Inter_600SemiBold', fontSize: 11, marginTop: 4 },
   progressRow: { alignItems: 'center', flexDirection: 'row', gap: 10, marginTop: 8 },
   progressTrack: {
     backgroundColor: 'rgba(255,255,255,0.2)',
@@ -211,16 +229,7 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     width: 28,
   },
-  secondaryBtn: {
-    alignItems: 'center',
-    borderRadius: 14,
-    borderWidth: 1,
-    flexDirection: 'row',
-    gap: 8,
-    justifyContent: 'center',
-    paddingVertical: 14,
-  },
-  secondaryBtnText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  error: { color: '#dc2626', fontFamily: 'Inter_500Medium', fontSize: 12, textAlign: 'center' },
   primaryBtnWrap: { borderRadius: 16, overflow: 'hidden' },
   primaryBtn: { alignItems: 'center', paddingVertical: 16 },
   primaryBtnText: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 14 },

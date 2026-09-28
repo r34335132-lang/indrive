@@ -1,19 +1,21 @@
 import { Feather } from '@expo/vector-icons';
+import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
 import { useRouter } from 'expo-router';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
+import { useState } from 'react';
+import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppLogo } from '@/components/AppLogo';
+import { LegalLinks } from '@/components/LegalLinks';
+import { RideNotice } from '@/components/RideNotice';
+import { PRIVACY_URL, SUPPORT_EMAIL, TERMS_URL } from '@/constants/legal';
 import { useAuth } from '@/context/AuthContext';
 import { useBooking } from '@/context/BookingContext';
 import { useColors } from '@/hooks/useColors';
 import type { UserRole } from '@/types';
 
-const options: Array<{ icon: keyof typeof Feather.glyphMap; title: string; subtitle: string }> = [
-  { icon: 'credit-card', title: 'Métodos de pago', subtitle: 'Visa terminada en 4242' },
-  { icon: 'sliders', title: 'Preferencias', subtitle: 'Notificaciones y privacidad' },
-  { icon: 'help-circle', title: 'Centro de ayuda', subtitle: 'Estamos aquí para ayudarte' },
-];
+const APP_VERSION =
+  Constants.expoConfig?.version ?? Constants.nativeAppVersion ?? '1.0.8';
 
 const ROLE_LABEL: Record<UserRole, string> = {
   passenger: 'Pasajero',
@@ -24,8 +26,11 @@ const ROLE_LABEL: Record<UserRole, string> = {
 export default function ProfileScreen() {
   const colors = useColors();
   const router = useRouter();
-  const { user, role, logout, switchRole, docsComplete } = useAuth();
+  const { user, role, logout, deleteAccount, switchRole, docsComplete } = useAuth();
   const { trips } = useBooking();
+  const [showDelete, setShowDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [deleteError, setDeleteError] = useState<string | null>(null);
 
   const completed = trips.filter((t) => t.status === 'Completado');
   const rated = completed.filter((t) => typeof t.rating === 'number');
@@ -46,30 +51,64 @@ export default function ProfileScreen() {
     }
   };
 
+  const confirmDelete = async () => {
+    setDeleting(true);
+    setDeleteError(null);
+    try {
+      await deleteAccount();
+      setShowDelete(false);
+      router.replace('/');
+    } catch (e) {
+      setDeleteError(e instanceof Error ? e.message : 'No se pudo eliminar la cuenta');
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const accountOptions: Array<{
+    icon: keyof typeof Feather.glyphMap;
+    title: string;
+    subtitle: string;
+    onPress: () => void;
+  }> = [
+    {
+      icon: 'help-circle',
+      title: 'Centro de ayuda',
+      subtitle: SUPPORT_EMAIL,
+      onPress: () => void Linking.openURL(`mailto:${SUPPORT_EMAIL}`),
+    },
+    {
+      icon: 'file-text',
+      title: 'Términos y condiciones',
+      subtitle: 'Contrato de uso de INRIDE',
+      onPress: () => void Linking.openURL(TERMS_URL),
+    },
+    {
+      icon: 'shield',
+      title: 'Política de privacidad',
+      subtitle: 'Cómo usamos tus datos',
+      onPress: () => void Linking.openURL(PRIVACY_URL),
+    },
+  ];
+
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
         <View style={styles.header}>
           <AppLogo />
-          <Pressable
-            style={[styles.settings, { backgroundColor: colors.card, borderColor: colors.border }]}
-          >
-            <Feather name="settings" size={18} color={colors.foreground} />
-          </Pressable>
         </View>
 
         <View style={[styles.profileCard, { backgroundColor: colors.primary }]}>
           <View style={styles.profileTop}>
             <View style={styles.avatar}>
               <Text style={[styles.avatarText, { color: colors.primary }]}>
-                {user?.initials ?? 'SG'}
+                {user?.initials ?? 'IR'}
               </Text>
             </View>
             <View style={styles.profileCopy}>
-              <Text style={styles.profileName}>{user?.name ?? 'Sofía García'}</Text>
-              <Text style={styles.profileEmail}>{user?.email ?? 'sofia@inride.app'}</Text>
+              <Text style={styles.profileName}>{user?.name ?? 'Usuario'}</Text>
+              <Text style={styles.profileEmail}>{user?.email ?? ''}</Text>
             </View>
-            <Feather name="edit-2" size={17} color="#c5edda" />
           </View>
           <View style={styles.profileStats}>
             <View>
@@ -83,7 +122,7 @@ export default function ProfileScreen() {
             </View>
             <View style={styles.profileStatLine} />
             <View>
-              <Text style={styles.profileStatValue}>{user?.memberSince ?? '2024'}</Text>
+              <Text style={styles.profileStatValue}>{user?.memberSince ?? '—'}</Text>
               <Text style={styles.profileStatLabel}>desde</Text>
             </View>
           </View>
@@ -96,7 +135,7 @@ export default function ProfileScreen() {
               Activo: {ROLE_LABEL[role ?? 'passenger']}
             </Text>
             <View style={styles.roleRow}>
-              {(user?.roles ?? []).map((r) => (
+              {(user?.roles ?? []).filter((r) => r !== 'admin').map((r) => (
                 <Pressable
                   key={r}
                   onPress={() => changeRole(r)}
@@ -145,9 +184,10 @@ export default function ProfileScreen() {
 
         <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Tu cuenta</Text>
         <View style={[styles.optionList, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {options.map((option) => (
+          {accountOptions.map((option) => (
             <Pressable
               key={option.title}
+              onPress={option.onPress}
               style={({ pressed }) => [styles.option, pressed && styles.pressed]}
             >
               <View style={[styles.optionIcon, { backgroundColor: colors.secondary }]}>
@@ -166,9 +206,7 @@ export default function ProfileScreen() {
 
         <Pressable
           testID="switch-driver"
-          onPress={async () => {
-            await logout();
-          }}
+          onPress={() => void logout()}
           style={({ pressed }) => [
             styles.driverMode,
             { backgroundColor: '#16362f' },
@@ -189,28 +227,62 @@ export default function ProfileScreen() {
         <View style={[styles.infoRow, { borderBottomColor: colors.border }]}>
           <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>Teléfono</Text>
           <Text style={[styles.infoValue, { color: colors.foreground }]}>
-            {user?.phone ?? '+52 618 123 4567'}
+            {user?.phone || '—'}
           </Text>
         </View>
         <View style={[styles.infoRow, { borderBottomColor: colors.border }]}>
           <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>Ciudad</Text>
           <Text style={[styles.infoValue, { color: colors.foreground }]}>
-            {user?.city ?? 'Durango, Dgo.'}
+            {user?.city || 'La Laguna'}
           </Text>
         </View>
 
         <Pressable
           testID="logout-passenger"
           style={styles.logout}
-          onPress={async () => {
-            await logout();
-          }}
+          onPress={() => void logout()}
         >
           <Feather name="log-out" size={16} color={colors.destructive} />
           <Text style={[styles.logoutText, { color: colors.destructive }]}>Cerrar sesión</Text>
         </Pressable>
-        <Text style={[styles.version, { color: colors.mutedForeground }]}>inride · versión 1.0.0</Text>
+
+        <Pressable
+          onPress={() => {
+            setDeleteError(null);
+            setShowDelete(true);
+          }}
+          style={styles.deleteBtn}
+        >
+          <Feather name="trash-2" size={15} color="#b91c1c" />
+          <Text style={styles.deleteText}>Eliminar cuenta</Text>
+        </Pressable>
+
+        <LegalLinks tone="muted" center />
+        <Text style={[styles.version, { color: colors.mutedForeground }]}>
+          inride · versión {APP_VERSION}
+        </Text>
       </ScrollView>
+
+      <RideNotice
+        visible={showDelete}
+        tone="warning"
+        icon="trash-2"
+        eyebrow="ELIMINAR CUENTA"
+        title="¿Borrar tu cuenta de INRIDE?"
+        message={
+          deleteError
+            ? deleteError
+            : 'Se eliminarán tu perfil, documentos y acceso. El historial de viajes se anonimiza. Esta acción no se puede deshacer.'
+        }
+        primaryLabel={deleting ? 'Eliminando…' : 'Sí, eliminar definitivamente'}
+        onPrimary={() => {
+          if (!deleting) void confirmDelete();
+        }}
+        secondaryLabel="Cancelar"
+        onSecondary={() => {
+          if (!deleting) setShowDelete(false);
+        }}
+      />
     </SafeAreaView>
   );
 }
@@ -223,14 +295,6 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     paddingTop: 4,
-  },
-  settings: {
-    alignItems: 'center',
-    borderRadius: 14,
-    borderWidth: 1,
-    height: 42,
-    justifyContent: 'center',
-    width: 42,
   },
   profileCard: { borderRadius: 23, gap: 22, padding: 18 },
   profileTop: { alignItems: 'center', flexDirection: 'row', gap: 12 },
@@ -328,5 +392,13 @@ const styles = StyleSheet.create({
     paddingVertical: 9,
   },
   logoutText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  deleteBtn: {
+    alignItems: 'center',
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    paddingVertical: 6,
+  },
+  deleteText: { color: '#b91c1c', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   version: { fontFamily: 'Inter_400Regular', fontSize: 10, textAlign: 'center' },
 });

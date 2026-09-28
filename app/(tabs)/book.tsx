@@ -17,10 +17,8 @@ const vehicles: Array<{
   capacity: string;
   duration: string;
 }> = [
-  { type: 'Económico', icon: 'navigation', label: 'Económico', capacity: '1–4 personas', duration: '15 min' },
-  { type: 'Comfort', icon: 'truck', label: 'Comfort', capacity: '1–4 personas', duration: '12 min' },
-  { type: 'Premium', icon: 'star', label: 'Premium', capacity: '1–4 personas', duration: '11 min' },
-  { type: 'Van', icon: 'users', label: 'Van', capacity: 'Hasta 6 personas', duration: '14 min' },
+  { type: 'Sedan', icon: 'navigation', label: 'Sedan', capacity: '1–4 personas', duration: '12 min' },
+  { type: 'SUV', icon: 'truck', label: 'SUV', capacity: '1–6 personas', duration: '14 min' },
 ];
 
 export default function BookScreen() {
@@ -31,7 +29,9 @@ export default function BookScreen() {
   const [step, setStep] = useState(1);
   const [showHighFare, setShowHighFare] = useState(false);
   const canContinue = booking.origin.trim().length > 2 && booking.destination.trim().length > 2;
-  const fare = getFare(booking.distanceKm, booking.origin, booking.destination);
+  const fare = getFare(booking.distanceKm, booking.origin, booking.destination, {
+    vehicle: booking.vehicle,
+  });
 
   const confirmAndSearch = async () => {
     try {
@@ -59,7 +59,7 @@ export default function BookScreen() {
   };
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
+    <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top', 'bottom']}>
       <ScrollView
         contentContainerStyle={styles.content}
         keyboardShouldPersistTaps="handled"
@@ -127,6 +127,23 @@ export default function BookScreen() {
               </View>
               <View style={[styles.routeConnector, { borderColor: colors.border }]} />
               <View style={styles.formRow}>
+                <View style={[styles.formIcon, { backgroundColor: '#e8f5ef' }]}>
+                  <Feather name="plus" size={12} color="#138a68" />
+                </View>
+                <View style={styles.formField}>
+                  <Text style={[styles.label, { color: colors.mutedForeground }]}>PARADA (OPCIONAL)</Text>
+                  <TextInput
+                    testID="stop-input"
+                    value={booking.stop}
+                    onChangeText={(stop) => updateBooking({ stop })}
+                    placeholder="Agregar una parada"
+                    placeholderTextColor={colors.mutedForeground}
+                    style={[styles.input, { color: colors.foreground }]}
+                  />
+                </View>
+              </View>
+              <View style={[styles.routeConnector, { borderColor: colors.border }]} />
+              <View style={styles.formRow}>
                 <View style={[styles.formIcon, { backgroundColor: '#fff1df' }]}>
                   <Feather name="map-pin" size={12} color="#e49339" />
                 </View>
@@ -185,7 +202,11 @@ export default function BookScreen() {
               Vehículos cómodos para cada tipo de trayecto.
             </Text>
             <View style={styles.vehicleList}>
-              {vehicles.map((vehicle) => (
+              {vehicles.map((vehicle) => {
+                const vehicleFare = getFare(booking.distanceKm, booking.origin, booking.destination, {
+                  vehicle: vehicle.type,
+                });
+                return (
                 <Pressable
                   key={vehicle.type}
                   testID={`vehicle-${vehicle.type}`}
@@ -222,12 +243,13 @@ export default function BookScreen() {
                     </Text>
                     <Text style={[styles.vehicleMeta, { color: colors.mutedForeground }]}>
                       {vehicle.capacity} · {vehicle.duration}
+                      {vehicle.type === 'SUV' ? ' · +20%' : ''}
                     </Text>
                   </View>
                   <View style={styles.vehiclePrice}>
                     <Text style={[styles.from, { color: colors.mutedForeground }]}>tarifa</Text>
                     <Text style={[styles.price, { color: colors.foreground }]}>
-                      {formatMoney(fare.total)}
+                      {formatMoney(vehicleFare.total)}
                     </Text>
                   </View>
                   {booking.vehicle === vehicle.type ? (
@@ -236,7 +258,8 @@ export default function BookScreen() {
                     </View>
                   ) : null}
                 </Pressable>
-              ))}
+              );
+              })}
             </View>
           </View>
         ) : null}
@@ -262,6 +285,16 @@ export default function BookScreen() {
                   <Text style={[styles.summaryValue, { color: colors.foreground }]}>
                     {booking.origin}
                   </Text>
+                  {booking.stop.trim() ? (
+                    <>
+                      <Text style={[styles.summaryLabel, { color: colors.mutedForeground, marginTop: 16 }]}>
+                        PARADA
+                      </Text>
+                      <Text style={[styles.summaryValue, { color: colors.foreground }]}>
+                        {booking.stop}
+                      </Text>
+                    </>
+                  ) : null}
                   <Text style={[styles.summaryLabel, { color: colors.mutedForeground, marginTop: 16 }]}>
                     DESTINO
                   </Text>
@@ -323,7 +356,9 @@ export default function BookScreen() {
             </View>
           </View>
         ) : null}
+      </ScrollView>
 
+      <View style={[styles.footer, { backgroundColor: colors.background, borderTopColor: colors.border }]}>
         <Pressable
           testID="booking-continue"
           disabled={step === 1 && !canContinue}
@@ -352,7 +387,7 @@ export default function BookScreen() {
             color={step === 1 && !canContinue ? colors.mutedForeground : '#ffffff'}
           />
         </Pressable>
-      </ScrollView>
+      </View>
 
       <RideNotice
         visible={showHighFare}
@@ -529,6 +564,11 @@ const styles = StyleSheet.create({
     gap: 10,
     justifyContent: 'center',
     paddingVertical: 16,
+  },
+  footer: {
+    borderTopWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   continueText: { fontFamily: 'Inter_700Bold', fontSize: 14 },
 });

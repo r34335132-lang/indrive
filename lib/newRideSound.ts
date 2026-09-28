@@ -1,4 +1,4 @@
-const source = require('@/assets/sounds/new-ride.wav');
+const source = require('@/assets/sounds/new-ride.m4a');
 
 type Player = {
   volume: number;
@@ -10,7 +10,7 @@ type Player = {
 let player: Player | null = null;
 let failed = false;
 
-/** Timbre corto de tres notas. Suena una vez por viaje nuevo, sin bucle. */
+/** Sonido de viaje nuevo / aceptación. Suena una vez, sin bucle. */
 export async function playNewRideChime() {
   if (failed) return;
   try {
@@ -23,7 +23,7 @@ export async function playNewRideChime() {
       });
       player = createAudioPlayer(source);
     }
-    player.volume = 0.7;
+    player.volume = 0.85;
     player.loop = false;
     await player.seekTo(0);
     player.play();

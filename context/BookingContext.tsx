@@ -7,8 +7,10 @@ import {
   fetchActiveRideForUser,
   fetchMyRides,
   fetchOpenRides,
+  closeRealtimeChannel,
   subscribeRideById,
   subscribeRides,
+  updateRideFare,
   updateRideStatus,
   upsertRideLocation,
 } from '@/lib/api/rides';
@@ -47,15 +49,19 @@ export type ActiveRide = {
   time: string;
   passengerId: string;
   driverId: string | null;
+  paymentMethod: import('@/types').PaymentMethod;
+  paymentStatus: import('@/types').PaymentStatus;
 };
 
 type BookingState = {
   origin: string;
   destination: string;
+  stop: string;
   date: string;
   time: string;
   vehicle: VehicleType;
   distanceKm: number;
+  paymentMethod: import('@/types').PaymentMethod;
 };
 
 export type MapRideRequest = {
@@ -65,9 +71,10 @@ export type MapRideRequest = {
   originLng: number;
   destinationLat: number;
   destinationLng: number;
-  distanceKm: number;
-  durationMinutes: number;
+  distanceKm?: number;
+  durationMinutes?: number;
   vehicle?: VehicleType;
+  paymentMethod?: import('@/types').PaymentMethod;
 };
 
 type BookingContextValue = {
@@ -85,24 +92,26 @@ type BookingContextValue = {
   startTrip: () => Promise<void>;
   completeRide: () => Promise<void>;
   clearActiveRide: () => Promise<void>;
+  cancelActiveRide: () => Promise<void>;
+  applyWaitFare: (waitMinutes: number) => Promise<void>;
   publishDriverLocation: (lat: number, lng: number, heading?: number) => Promise<void>;
   refreshTrips: () => Promise<void>;
 };
 
 const initialBooking: BookingState = {
-  origin: 'Paseo Durango',
-  destination: 'Parque Guadiana',
+  origin: '',
+  destination: '',
+  stop: '',
   date: 'Hoy',
   time: new Date().toLocaleTimeString('es-MX', { hour: '2-digit', minute: '2-digit' }),
-  vehicle: 'Comfort',
+  vehicle: 'Sedan',
   distanceKm: 4.2,
+  paymentMethod: 'cash',
 };
 
 const durations: Record<VehicleType, string> = {
-  Económico: '15 min',
-  Comfort: '12 min',
-  Premium: '11 min',
-  Van: '14 min',
+  Sedan: '12 min',
+  SUV: '14 min',
 };
 
 const BookingContext = createContext<BookingContextValue | null>(null);
@@ -134,6 +143,8 @@ function toActiveRide(ride: Ride): ActiveRide {
     time: ride.scheduledTime ?? '',
     passengerId: ride.passengerId,
     driverId: ride.driverId,
+    paymentMethod: ride.paymentMethod ?? 'cash',
+    paymentStatus: ride.paymentStatus ?? 'none',
   };
 }
 
@@ -217,7 +228,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     });
 
     return () => {
-      channel.unsubscribe();
+      closeRealtimeChannel(channel);
     };
   }, [activeRide, profile, refreshTrips, role]);
 
@@ -232,7 +243,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       setActiveRide(toActiveRide(ride));
     });
     return () => {
-      channel.unsubscribe();
+      closeRealtimeChannel(channel);
     };
   }, [activeRide?.id, refreshTrips]);
 
@@ -251,17 +262,21 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
   const requestRide = useCallback(async (input?: MapRideRequest) => {
     if (!profile) throw new Error('Inicia sesión para pedir un viaje');
     const origin = input?.origin ?? booking.origin;
-    const destination = input?.destination ?? booking.destination;
+    const rawDestination = input?.destination ?? booking.destination;
+    const stopLabel = booking.stop.trim();
+    const destination =
+      input?.destination ??
+      (stopLabel ? `${rawDestination} (vía ${stopLabel})` : rawDestination);
     const originPlace = input
       ? { coordinate: { latitude: input.originLat, longitude: input.originLng } }
       : resolvePlace(booking.origin);
     const destPlace = input
       ? { coordinate: { latitude: input.destinationLat, longitude: input.destinationLng } }
       : resolvePlace(booking.destination);
-    const distanceKm = input?.distanceKm || booking.distanceKm || estimateRouteKm(origin, destination);
+    const distanceKm = input?.distanceKm || booking.distanceKm || estimateRouteKm(origin, rawDestination);
     const durationMinutes = input?.durationMinutes;
-    const fare = getFare(distanceKm, origin, destination, { durationMinutes });
     const vehicle = input?.vehicle ?? booking.vehicle;
+    const fare = getFare(distanceKm, origin, destination, { durationMinutes, vehicle });
     const durationLabel = durationMinutes
       ? `${Math.max(1, Math.round(durationMinutes))} min`
       : durations[vehicle];
@@ -283,6 +298,7 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       durationLabel,
       scheduledDate: booking.date,
       scheduledTime: booking.time,
+      paymentMethod: input?.paymentMethod ?? booking.paymentMethod ?? 'cash',
     });
 
     const active = toActiveRide(ride);
@@ -341,6 +357,34 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     await refreshTrips();
   }, [activeRide, refreshTrips]);
 
+  /** Cancela el viaje en cualquier fase previa a completarlo. */
+  const cancelActiveRide = useCallback(async () => {
+    if (!activeRide) return;
+    if (activeRide.status !== 'completed' && activeRide.status !== 'cancelled') {
+      await cancelRide(activeRide.id);
+    }
+    setActiveRide(null);
+    await refreshTrips();
+  }, [activeRide, refreshTrips]);
+
+  /** Suma espera ($1/min) al precio del viaje activo. */
+  const applyWaitFare = useCallback(
+    async (waitMinutes: number) => {
+      if (!activeRide || waitMinutes <= 0) return;
+      const minutes = Math.max(0, Math.ceil(waitMinutes));
+      const waitExtra = minutes * 1; // $1 MXN por minuto de espera
+      const price = Number(activeRide.price) + waitExtra;
+      const driverNet = Number(activeRide.net) + waitExtra;
+      const ride = await updateRideFare(activeRide.id, {
+        price,
+        driverNet,
+        appNet: Number(activeRide.appNet),
+      });
+      setActiveRide(toActiveRide(ride));
+    },
+    [activeRide],
+  );
+
   const publishDriverLocation = useCallback(
     async (lat: number, lng: number, heading = 0) => {
       if (!activeRide) return;
@@ -365,6 +409,8 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       startTrip,
       completeRide,
       clearActiveRide,
+      cancelActiveRide,
+      applyWaitFare,
       publishDriverLocation,
       refreshTrips,
     }),
@@ -381,6 +427,8 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       startTrip,
       completeRide,
       clearActiveRide,
+      cancelActiveRide,
+      applyWaitFare,
       publishDriverLocation,
       refreshTrips,
     ],

@@ -28,10 +28,24 @@ export function TariffProvider({ children }: { children: React.ReactNode }) {
   const [tariff, setTariff] = useState<TariffConfig>(DEFAULT_TARIFF);
 
   const refreshTariff = useCallback(async () => {
-    if (!isSupabaseConfigured) return;
+    if (!isSupabaseConfigured) {
+      setTariff(DEFAULT_TARIFF);
+      return;
+    }
     try {
-      const next = await fetchActiveTariff();
-      setTariff(next);
+      const remote = await fetchActiveTariff();
+      // Si la BD aún tiene tarifas viejas/caras o surge activo, sincroniza La Laguna.
+      const needsLagunaRates =
+        remote.highDemandActive ||
+        remote.perKmTotal >= 9 ||
+        remote.baseFare >= 30 ||
+        remote.appFlatFee >= 12;
+      if (needsLagunaRates) {
+        const synced = await updateActiveTariff(DEFAULT_TARIFF);
+        setTariff(synced);
+        return;
+      }
+      setTariff(remote);
     } catch {
       setTariff(DEFAULT_TARIFF);
     }

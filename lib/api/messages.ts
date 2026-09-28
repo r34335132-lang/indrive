@@ -1,4 +1,5 @@
 import { supabase } from '@/lib/supabase';
+import { closeRealtimeChannel, openRealtimeChannel } from '@/lib/api/realtime';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export type RideMessage = {
@@ -52,8 +53,8 @@ export function subscribeRideMessages(
   rideId: string,
   onInsert: (message: RideMessage) => void,
 ): RealtimeChannel {
-  return supabase
-    .channel(`ride-messages-${rideId}`)
+  const channel = openRealtimeChannel(`ride-messages-${rideId}`);
+  channel
     .on(
       'postgres_changes',
       {
@@ -68,4 +69,7 @@ export function subscribeRideMessages(
       },
     )
     .subscribe();
+  return channel;
 }
+
+export { closeRealtimeChannel };

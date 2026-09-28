@@ -16,7 +16,7 @@ class MapLoadBoundary extends Component<{ children: ReactNode }, BoundaryState> 
         <View style={styles.center}>
           <Text style={styles.title}>El mapa no está en esta versión</Text>
           <Text style={styles.copy}>
-            Expo Go no incluye MapLibre. La app sí puede abrir. El mapa solo funciona en el APK.
+            No se pudo cargar el mapa. Revisa tu conexión a internet e inténtalo de nuevo.
           </Text>
         </View>
       );

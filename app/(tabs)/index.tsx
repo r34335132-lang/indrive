@@ -1,289 +1,756 @@
 import { Feather } from '@expo/vector-icons';
-import { LinearGradient } from 'expo-linear-gradient';
-import { Redirect, useRouter, type Href } from 'expo-router';
-import { useMemo } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { AppLogo } from '@/components/AppLogo';
-import { SectionTitle } from '@/components/SectionTitle';
-import { TripCard } from '@/components/TripCard';
+import { type Href, Redirect, useRouter } from 'expo-router';
+import { useCallback, useEffect, useMemo, useState } from 'react';
+import {
+  ActivityIndicator,
+  Modal,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  View,
+} from 'react-native';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
+import { AppMap } from '@/components/maps/AppMap';
+import { MapSafeBoundary } from '@/components/maps/MapSafeBoundary';
+import { SideMenu } from '@/components/SideMenu';
+import { formatMoney } from '@/constants/pricing';
 import { useAuth } from '@/context/AuthContext';
 import { useBooking } from '@/context/BookingContext';
+import { useTariff } from '@/context/TariffContext';
 import { useColors } from '@/hooks/useColors';
+import { useLocation } from '@/hooks/useLocation';
+import {
+  DURANGO_PLACES,
+  featuredPlaces,
+  placesByCity,
+  placesNear,
+  reverseGeocode,
+  searchPlaces,
+  type Place,
+} from '@/lib/places';
+import { getOsrmRouteVia, straightLineRoute } from '@/lib/routing';
+import type { MapCoordinate, OsrmRoute, VehicleType } from '@/types';
+
+const FALLBACK: MapCoordinate = { latitude: 25.555, longitude: -103.45 };
+
+function greeting() {
+  const hour = new Date().getHours();
+  if (hour < 12) return 'Buenos días';
+  if (hour < 19) return 'Buenas tardes';
+  return 'Buenas noches';
+}
 
 export default function HomeScreen() {
   const colors = useColors();
+  const insets = useSafeAreaInsets();
   const router = useRouter();
-  const { user, role, isReady } = useAuth();
-  const { trips } = useBooking();
+  const { user, role, isReady, logout } = useAuth();
+  const { requestRide, trips } = useBooking();
+  const { getFare } = useTariff();
+  const { coords, refresh } = useLocation();
 
-  const upcoming = useMemo(
-    () => trips.find((trip) => trip.status !== 'Completado'),
-    [trips],
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [searchOpen, setSearchOpen] = useState(false);
+  const [query, setQuery] = useState('');
+  const [results, setResults] = useState<Place[]>(() => featuredPlaces(12));
+  const [searching, setSearching] = useState(false);
+  const [destination, setDestination] = useState<MapCoordinate | null>(null);
+  const [destinationLabel, setDestinationLabel] = useState('');
+  const [stop, setStop] = useState<Place | null>(null);
+  const [pickingStop, setPickingStop] = useState(false);
+  const [originLabel, setOriginLabel] = useState('Mi ubicación');
+  const [route, setRoute] = useState<OsrmRoute | null>(null);
+  const [routing, setRouting] = useState(false);
+  const [requesting, setRequesting] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [cityFilter, setCityFilter] = useState<'cerca' | 'gomez' | 'torreon' | 'lerdo' | 'all'>(
+    'cerca',
   );
-  const completed = useMemo(
-    () => trips.filter((trip) => trip.status === 'Completado'),
-    [trips],
-  );
-  const avgRating = useMemo(() => {
-    const rated = completed.filter((t) => typeof t.rating === 'number');
-    if (!rated.length) return user?.rating ?? 4.9;
-    return rated.reduce((sum, t) => sum + (t.rating ?? 0), 0) / rated.length;
-  }, [completed, user?.rating]);
+  const [paymentMethod, setPaymentMethod] = useState<'cash' | 'card'>('cash');
+  const [vehicle, setVehicle] = useState<VehicleType>('Sedan');
 
-  if (isReady && role !== 'passenger') {
+  const center = coords ?? FALLBACK;
+  const recent = useMemo(() => {
+    const done = trips.filter((t) => t.status === 'Completado').slice(0, 3);
+    const seen = new Set<string>();
+    return done
+      .map((t) => {
+        const title = (t.destination.split(',')[0] || t.destination || 'Destino').trim();
+        const subtitle = t.destination || title;
+        const place =
+          DURANGO_PLACES.find((p) =>
+            subtitle.toLowerCase().includes(p.name.toLowerCase()),
+          ) ?? null;
+        return {
+          id: t.id,
+          title,
+          subtitle,
+          place,
+        };
+      })
+      .filter((item) => {
+        const key = item.subtitle.toLowerCase();
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+  }, [trips]);
+
+  const homePlace = featuredPlaces(1)[0] ?? DURANGO_PLACES[0];
+
+  useEffect(() => {
+    if (!coords) return;
+    reverseGeocode(coords.latitude, coords.longitude).then((label) => {
+      if (label) setOriginLabel(label);
+    });
+  }, [coords]);
+
+  useEffect(() => {
+    if (!searchOpen) return;
+    let cancelled = false;
+    setSearching(true);
+    const timer = setTimeout(() => {
+      const run = async () => {
+        if (query.trim().length < 2) {
+          if (cityFilter === 'cerca') return placesNear(coords, 18);
+          if (cityFilter === 'all') return featuredPlaces(18);
+          return placesByCity(cityFilter);
+        }
+        return searchPlaces(query, coords);
+      };
+      run()
+        .then((next) => {
+          if (!cancelled) setResults(next);
+        })
+        .finally(() => {
+          if (!cancelled) setSearching(false);
+        });
+    }, 220);
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [query, searchOpen, coords, cityFilter]);
+
+  useEffect(() => {
+    if (!coords || !destination) {
+      setRoute(null);
+      return;
+    }
+    let cancelled = false;
+    setRouting(true);
+    setError(null);
+    const via = stop ? [stop.coordinate] : [];
+    getOsrmRouteVia([coords, ...via, destination])
+      .then((next) => {
+        if (cancelled) return;
+        setRoute(next);
+        setError(next.source === 'fallback' ? 'Ruta estimada (servidor de calles no respondió).' : null);
+      })
+      .catch((error) => {
+        if (!cancelled) {
+          setRoute(straightLineRoute(coords, destination, via));
+          setError(error instanceof Error ? error.message : 'Ruta estimada.');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setRouting(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [coords, destination, stop]);
+
+  const fare = useMemo(() => {
+    if (!route) return null;
+    return getFare(route.distanceMeters / 1000, originLabel, destinationLabel, {
+      durationMinutes: route.durationSeconds / 60,
+      vehicle,
+    });
+  }, [destinationLabel, getFare, originLabel, route, vehicle]);
+
+  const pickPlace = useCallback(
+    (place: Place) => {
+      if (pickingStop) {
+        setStop(place);
+        setPickingStop(false);
+        setSearchOpen(false);
+        setQuery('');
+        return;
+      }
+      setDestination(place.coordinate);
+      setDestinationLabel(place.name);
+      setSearchOpen(false);
+      setQuery('');
+    },
+    [pickingStop],
+  );
+
+  const clearDestination = () => {
+    setDestination(null);
+    setDestinationLabel('');
+    setStop(null);
+    setRoute(null);
+    setError(null);
+  };
+
+  const requestTrip = async () => {
+    if (!coords || !destination || requesting) return;
+    const activeRoute =
+      route ?? straightLineRoute(coords, destination, stop ? [stop.coordinate] : []);
+    setRequesting(true);
+    setError(null);
+    try {
+      const destName = stop
+        ? `${destinationLabel} (vía ${stop.name})`
+        : destinationLabel || 'Destino';
+      const ride = await requestRide({
+        origin: originLabel || 'Mi ubicación',
+        destination: destName,
+        originLat: coords.latitude,
+        originLng: coords.longitude,
+        destinationLat: destination.latitude,
+        destinationLng: destination.longitude,
+        distanceKm: Math.round((activeRoute.distanceMeters / 1000) * 10) / 10,
+        durationMinutes: activeRoute.durationSeconds / 60,
+        paymentMethod,
+        vehicle,
+      });
+      // Tarjeta: cobrar inmediatamente antes de buscar conductor
+      if (paymentMethod === 'card') {
+        router.replace({
+          pathname: '/pay',
+          params: {
+            rideId: ride.id,
+            amount: String(ride.price ?? 0),
+            next: 'waiting',
+          },
+        } as Href);
+        return;
+      }
+      router.push('/waiting' as Href);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'No se pudo pedir el viaje.');
+    } finally {
+      setRequesting(false);
+    }
+  };
+
+  if (isReady && role === 'driver') {
+    return <Redirect href="/driver" />;
+  }
+  if (isReady && role === 'admin') {
+    return <Redirect href="/admin" />;
+  }
+  if (isReady && !user) {
     return <Redirect href="/" />;
   }
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.content}>
-        <View style={styles.header}>
-          <AppLogo />
-          <Pressable
-            testID="notifications"
-            style={[styles.iconButton, { backgroundColor: colors.card, borderColor: colors.border }]}
-          >
-            <Feather name="bell" size={18} color={colors.foreground} />
-            <View style={[styles.notificationDot, { backgroundColor: colors.primary }]} />
-          </Pressable>
-        </View>
+    <View style={styles.screen}>
+      <MapSafeBoundary
+        fallback={
+          <View style={[styles.map, { alignItems: 'center', justifyContent: 'center', backgroundColor: '#e8f2ee' }]}>
+            <Text style={{ fontFamily: 'Inter_600SemiBold', color: '#16362f' }}>Mapa cargando…</Text>
+          </View>
+        }
+      >
+        <AppMap
+          style={styles.map}
+          center={center}
+          zoom={15}
+          userLocation={coords}
+          destination={destination}
+          route={route?.coordinates ?? []}
+          followUser={!destination}
+          markers={
+            stop
+              ? [{ id: 'stop', coordinate: stop.coordinate, color: '#e49339', label: stop.name }]
+              : []
+          }
+        />
+      </MapSafeBoundary>
 
-        <View style={styles.greeting}>
-          <Text style={[styles.hello, { color: colors.mutedForeground }]}>
-            Hola, {user?.firstName ?? 'Sofía'}
-          </Text>
-          <Text style={[styles.name, { color: colors.foreground }]}>¿De dónde vamos hoy?</Text>
-        </View>
-
-        <LinearGradient
-          colors={['#147c5e', '#2ca477']}
-          start={{ x: 0, y: 0 }}
-          end={{ x: 1, y: 1 }}
-          style={styles.hero}
+      <SafeAreaView style={styles.top} edges={['top']} pointerEvents="box-none">
+        <Pressable
+          onPress={() => setMenuOpen(true)}
+          style={[styles.menuBtn, { backgroundColor: '#fff' }]}
         >
-          <View style={styles.heroGlow} />
-          <View style={styles.heroCopy}>
-            <View style={styles.heroLabel}>
-              <View style={styles.liveDot} />
-              <Text style={styles.heroLabelText}>INRIDE · MOVILIDAD</Text>
-            </View>
-            <Text style={styles.heroTitle}>Cuéntanos tu{'\n'}ruta</Text>
-            <Text style={styles.heroSubtitle}>
-              Indica origen y destino, te mostramos la tarifa y buscamos conductor.
-            </Text>
-          </View>
-          <View style={styles.routeCard}>
-            <Pressable style={styles.inputRow} onPress={() => router.push('/book')}>
-              <View style={[styles.pin, { backgroundColor: '#e3f6ea' }]}>
-                <Feather name="circle" size={10} color={colors.primary} />
-              </View>
-              <View style={styles.inputText}>
-                <Text style={[styles.inputCaption, { color: colors.mutedForeground }]}>DESDE</Text>
-                <Text style={[styles.inputValue, { color: colors.foreground }]}>
-                  ¿Desde dónde sales?
-                </Text>
-              </View>
-              <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-            </Pressable>
-            <View style={[styles.inputDivider, { borderColor: colors.border }]} />
-            <Pressable style={styles.inputRow} onPress={() => router.push('/book')}>
-              <View style={[styles.pin, { backgroundColor: '#fff1df' }]}>
-                <Feather name="map-pin" size={11} color="#e49339" />
-              </View>
-              <View style={styles.inputText}>
-                <Text style={[styles.inputCaption, { color: colors.mutedForeground }]}>HASTA</Text>
-                <Text style={[styles.inputValue, { color: colors.foreground }]}>
-                  ¿A dónde te llevamos?
-                </Text>
-              </View>
-              <Feather name="chevron-right" size={16} color={colors.mutedForeground} />
-            </Pressable>
-            <Pressable
-              testID="book-home"
-              onPress={() => router.push('/book')}
-              style={({ pressed }) => [
-                styles.bookButton,
-                { backgroundColor: colors.primary },
-                pressed && styles.pressed,
-              ]}
-            >
-              <Text style={styles.bookText}>Pedir viaje</Text>
-              <Feather name="arrow-up-right" size={18} color="#ffffff" />
-            </Pressable>
-            <Pressable
-              testID="open-map"
-              onPress={() => router.push('/map')}
-              style={({ pressed }) => [styles.mapLink, pressed && styles.pressed]}
-            >
-              <Feather name="map" size={16} color={colors.primary} />
-              <Text style={[styles.mapLinkText, { color: colors.primary }]}>Abrir mapa</Text>
-            </Pressable>
-          </View>
-        </LinearGradient>
+          <Feather name="menu" size={20} color="#16362f" />
+        </Pressable>
+        <Pressable
+          onPress={() => void refresh()}
+          style={[styles.menuBtn, { backgroundColor: '#fff' }]}
+        >
+          <Feather name="crosshair" size={18} color="#16362f" />
+        </Pressable>
+      </SafeAreaView>
 
-        <View style={styles.statsRow}>
-          <View style={[styles.stat, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.statValue, { color: colors.foreground }]}>
-              {user?.totalTrips ?? trips.length}
-            </Text>
-            <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>viajes realizados</Text>
-          </View>
-          <View style={[styles.stat, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.statValue, { color: colors.foreground }]}>
-              {avgRating.toFixed(1)}
-            </Text>
-            <View style={styles.rating}>
-              <Feather name="star" size={13} color="#e9a33f" />
-              <Text style={[styles.statLabel, { color: colors.mutedForeground }]}>tu calificación</Text>
-            </View>
-          </View>
-        </View>
-
-        <View style={styles.section}>
-          <SectionTitle title="Tu próximo viaje" action="Ver todos" />
-          {upcoming ? (
-            <TripCard trip={upcoming} onPress={() => router.push('/ride-map' as Href)} />
-          ) : (
-            <View style={[styles.empty, { backgroundColor: colors.card, borderColor: colors.border }]}>
-              <Feather name="calendar" size={22} color={colors.primary} />
-              <Text style={[styles.emptyText, { color: colors.foreground }]}>
-                Aún no tienes viajes programados
+      <SafeAreaView style={styles.bottom} edges={['bottom']} pointerEvents="box-none">
+        <View style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, 16) + 8 }]}>
+          <View style={styles.handle} />
+          {!destination ? (
+            <>
+              <Text style={styles.hello}>
+                {greeting()} {user?.firstName ?? 'pasajero'}
               </Text>
-            </View>
+              <Pressable style={styles.search} onPress={() => setSearchOpen(true)}>
+                <Text style={styles.searchText}>¿A dónde vas?</Text>
+                <Feather name="arrow-right" size={18} color="#16362f" />
+              </Pressable>
+
+              <Pressable style={styles.quick} onPress={() => pickPlace(homePlace)}>
+                <View style={[styles.quickIcon, { backgroundColor: '#e8f5ef' }]}>
+                  <Feather name="home" size={18} color="#138a68" />
+                </View>
+                <View style={styles.quickCopy}>
+                  <Text style={styles.quickTitle}>Casa</Text>
+                  <Text style={styles.quickSub} numberOfLines={1}>
+                    {homePlace.name}
+                  </Text>
+                </View>
+              </Pressable>
+
+              {recent.length
+                ? recent.map((item) => (
+                    <Pressable
+                      key={item.id}
+                      style={styles.quick}
+                      onPress={() => {
+                        if (item.place) pickPlace(item.place);
+                        else setSearchOpen(true);
+                      }}
+                    >
+                      <View style={[styles.quickIcon, { backgroundColor: '#f3f4f3' }]}>
+                        <Feather name="clock" size={18} color="#16362f" />
+                      </View>
+                      <View style={styles.quickCopy}>
+                        <Text style={styles.quickTitle}>{item.title}</Text>
+                        <Text style={styles.quickSub} numberOfLines={1}>
+                          {item.subtitle}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  ))
+                : featuredPlaces(6).map((place) => (
+                    <Pressable
+                      key={`${place.city ?? 'laguna'}-${place.name}`}
+                      style={styles.quick}
+                      onPress={() => pickPlace(place)}
+                    >
+                      <View style={[styles.quickIcon, { backgroundColor: '#f3f4f3' }]}>
+                        <Feather name="map-pin" size={18} color="#16362f" />
+                      </View>
+                      <View style={styles.quickCopy}>
+                        <Text style={styles.quickTitle}>{place.name}</Text>
+                        <Text style={styles.quickSub} numberOfLines={1}>
+                          {place.city || 'La Laguna'}
+                        </Text>
+                      </View>
+                    </Pressable>
+                  ))}
+            </>
+          ) : (
+            <>
+              <View style={styles.routeHead}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.routeFrom} numberOfLines={1}>
+                    Desde · {originLabel}
+                  </Text>
+                  {stop ? (
+                    <Text style={styles.routeStop} numberOfLines={1}>
+                      Parada · {stop.name}
+                    </Text>
+                  ) : null}
+                  <Text style={styles.routeTo} numberOfLines={1}>
+                    Hasta · {destinationLabel}
+                  </Text>
+                </View>
+                <Pressable onPress={clearDestination} style={styles.clear}>
+                  <Feather name="x" size={18} color="#16362f" />
+                </Pressable>
+              </View>
+
+              <Pressable
+                style={styles.stopBtn}
+                onPress={() => {
+                  setPickingStop(true);
+                  setSearchOpen(true);
+                }}
+              >
+                <Feather name="plus-circle" size={18} color="#138a68" />
+                <Text style={styles.stopBtnText}>
+                  {stop ? 'Cambiar parada' : 'Agregar parada'}
+                </Text>
+                {stop ? (
+                  <Pressable
+                    onPress={(e) => {
+                      e.stopPropagation?.();
+                      setStop(null);
+                    }}
+                    hitSlop={10}
+                  >
+                    <Feather name="trash-2" size={16} color="#c2410c" />
+                  </Pressable>
+                ) : null}
+              </Pressable>
+
+              {routing ? (
+                <ActivityIndicator color="#138a68" style={{ marginVertical: 8 }} />
+              ) : (
+                <Text style={styles.fare}>
+                  {formatMoney(fare?.total ?? 0)} · {vehicle} ·{' '}
+                  {Math.round((route?.durationSeconds ?? 0) / 60) || '—'} min
+                </Text>
+              )}
+
+              <View style={styles.payRow}>
+                <Pressable
+                  onPress={() => setVehicle('Sedan')}
+                  style={[styles.payChip, vehicle === 'Sedan' && styles.payChipOn]}
+                >
+                  <Feather name="navigation" size={14} color={vehicle === 'Sedan' ? '#fff' : '#16362f'} />
+                  <Text style={[styles.payChipText, vehicle === 'Sedan' && styles.payChipTextOn]}>
+                    Sedan
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setVehicle('SUV')}
+                  style={[styles.payChip, vehicle === 'SUV' && styles.payChipOn]}
+                >
+                  <Feather name="truck" size={14} color={vehicle === 'SUV' ? '#fff' : '#16362f'} />
+                  <Text style={[styles.payChipText, vehicle === 'SUV' && styles.payChipTextOn]}>
+                    SUV · +20%
+                  </Text>
+                </Pressable>
+              </View>
+
+              <View style={styles.payRow}>
+                <Pressable
+                  onPress={() => setPaymentMethod('cash')}
+                  style={[styles.payChip, paymentMethod === 'cash' && styles.payChipOn]}
+                >
+                  <Feather name="dollar-sign" size={14} color={paymentMethod === 'cash' ? '#fff' : '#16362f'} />
+                  <Text style={[styles.payChipText, paymentMethod === 'cash' && styles.payChipTextOn]}>
+                    Efectivo
+                  </Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => setPaymentMethod('card')}
+                  style={[styles.payChip, paymentMethod === 'card' && styles.payChipOn]}
+                >
+                  <Feather name="credit-card" size={14} color={paymentMethod === 'card' ? '#fff' : '#16362f'} />
+                  <Text style={[styles.payChipText, paymentMethod === 'card' && styles.payChipTextOn]}>
+                    Tarjeta · MP
+                  </Text>
+                </Pressable>
+              </View>
+
+              {error ? <Text style={styles.error}>{error}</Text> : null}
+              <Pressable
+                disabled={!coords || !destination || requesting}
+                onPress={() => void requestTrip()}
+                style={[styles.cta, requesting && { opacity: 0.7 }]}
+              >
+                <Text style={styles.ctaText}>
+                  {requesting
+                    ? paymentMethod === 'card'
+                      ? 'Abriendo pago…'
+                      : 'Buscando conductor…'
+                    : paymentMethod === 'card'
+                      ? 'Pagar y pedir viaje'
+                      : 'Pedir viaje ahora'}
+                </Text>
+              </Pressable>
+            </>
           )}
         </View>
+      </SafeAreaView>
 
-        <View style={styles.section}>
-          <SectionTitle eyebrow="Historial" title="Viajes recientes" />
-          <View style={styles.recentList}>
-            {completed.slice(0, 3).map((trip) => (
-              <TripCard key={trip.id} trip={trip} />
-            ))}
+      <SideMenu
+        visible={menuOpen}
+        onClose={() => setMenuOpen(false)}
+        title={user?.name ?? 'Pasajero'}
+        subtitle={user?.email}
+        rating={user?.rating}
+        items={[
+          {
+            key: 'trips',
+            label: 'Mis viajes',
+            icon: 'clock',
+            onPress: () => router.push('/(tabs)/trips'),
+          },
+          {
+            key: 'profile',
+            label: 'Ajustes',
+            icon: 'settings',
+            onPress: () => router.push('/(tabs)/profile'),
+          },
+          {
+            key: 'help',
+            label: 'Ayuda',
+            icon: 'help-circle',
+            onPress: () => router.push('/(tabs)/profile'),
+          },
+          {
+            key: 'logout',
+            label: 'Cerrar sesión',
+            icon: 'log-out',
+            onPress: () => void logout(),
+          },
+        ]}
+      />
+
+      <Modal
+        visible={searchOpen}
+        animationType="slide"
+        onRequestClose={() => {
+          setSearchOpen(false);
+          setPickingStop(false);
+        }}
+      >
+        <SafeAreaView style={styles.searchScreen} edges={['top', 'bottom']}>
+          <View style={styles.searchHeader}>
+            <Pressable
+              onPress={() => {
+                setSearchOpen(false);
+                setPickingStop(false);
+              }}
+              style={styles.back}
+            >
+              <Feather name="arrow-left" size={20} color="#16362f" />
+            </Pressable>
+            <TextInput
+              autoFocus
+              value={query}
+              onChangeText={setQuery}
+              placeholder={pickingStop ? 'Buscar parada' : 'Buscar destino'}
+              placeholderTextColor="#8a9a93"
+              style={styles.searchInput}
+            />
           </View>
-        </View>
-      </ScrollView>
-    </SafeAreaView>
+          <Text style={styles.originHint}>Desde tu ubicación · {originLabel}</Text>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={styles.cityChips}
+            keyboardShouldPersistTaps="handled"
+          >
+            {(
+              [
+                { id: 'cerca', label: 'Cerca de ti' },
+                { id: 'gomez', label: 'Gómez Palacio' },
+                { id: 'torreon', label: 'Torreón' },
+                { id: 'lerdo', label: 'Lerdo' },
+                { id: 'all', label: 'Toda La Laguna' },
+              ] as const
+            ).map((chip) => {
+              const active = cityFilter === chip.id;
+              return (
+                <Pressable
+                  key={chip.id}
+                  onPress={() => {
+                    setCityFilter(chip.id);
+                    setQuery('');
+                  }}
+                  style={[styles.cityChip, active && styles.cityChipOn]}
+                >
+                  <Text style={[styles.cityChipText, active && styles.cityChipTextOn]}>{chip.label}</Text>
+                </Pressable>
+              );
+            })}
+          </ScrollView>
+          {searching ? <ActivityIndicator color="#138a68" style={{ marginTop: 16 }} /> : null}
+          <ScrollView keyboardShouldPersistTaps="handled" contentContainerStyle={{ padding: 16, paddingBottom: 40 }}>
+            {results.length === 0 && !searching ? (
+              <Text style={[styles.quickSub, { textAlign: 'center', marginTop: 24 }]}>
+                No hay resultados. Prueba “Gómez”, “Lerdo” o “Galerías”.
+              </Text>
+            ) : null}
+            {results.map((place) => (
+              <Pressable
+                key={`${place.city}-${place.name}-${place.coordinate.latitude}`}
+                style={styles.result}
+                onPress={() => pickPlace(place)}
+              >
+                <View style={[styles.quickIcon, { backgroundColor: '#e8f5ef' }]}>
+                  <Feather name="map-pin" size={18} color="#138a68" />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.quickTitle}>{place.name}</Text>
+                  <Text style={styles.quickSub} numberOfLines={2}>
+                    {place.city || place.aliases[0] || 'La Laguna'}
+                  </Text>
+                </View>
+              </Pressable>
+            ))}
+          </ScrollView>
+        </SafeAreaView>
+      </Modal>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  content: { gap: 22, paddingBottom: 28, paddingHorizontal: 20 },
-  header: {
+  screen: { flex: 1, backgroundColor: '#16362f' },
+  map: { ...StyleSheet.absoluteFillObject },
+  top: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
-    paddingTop: 4,
+    paddingHorizontal: 14,
+    paddingTop: 8,
   },
-  iconButton: {
+  menuBtn: {
     alignItems: 'center',
-    borderRadius: 14,
-    borderWidth: 1,
+    borderRadius: 12,
+    elevation: 3,
     height: 42,
     justifyContent: 'center',
-    position: 'relative',
+    shadowColor: '#000',
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
     width: 42,
   },
-  notificationDot: {
-    borderRadius: 4,
-    height: 7,
-    position: 'absolute',
-    right: 9,
-    top: 9,
-    width: 7,
+  bottom: { bottom: 0, left: 0, position: 'absolute', right: 0 },
+  sheet: {
+    backgroundColor: '#fff',
+    borderTopLeftRadius: 22,
+    borderTopRightRadius: 22,
+    gap: 10,
+    paddingBottom: 8,
+    paddingHorizontal: 18,
+    paddingTop: 10,
   },
-  greeting: { gap: 4 },
-  hello: { fontFamily: 'Inter_500Medium', fontSize: 14 },
-  name: {
-    fontFamily: 'Inter_700Bold',
-    fontSize: 28,
-    letterSpacing: -1,
-    lineHeight: 34,
+  handle: {
+    alignSelf: 'center',
+    backgroundColor: '#d7ddd9',
+    borderRadius: 99,
+    height: 4,
+    marginBottom: 6,
+    width: 42,
   },
-  hero: { borderRadius: 28, minHeight: 360, overflow: 'hidden', padding: 20 },
-  heroGlow: {
-    backgroundColor: 'rgba(255,255,255,0.08)',
-    borderRadius: 150,
-    height: 260,
-    position: 'absolute',
-    right: -100,
-    top: -80,
-    width: 260,
+  hello: { color: '#16362f', fontFamily: 'Inter_700Bold', fontSize: 18 },
+  search: {
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderColor: '#dfe6e2',
+    borderRadius: 14,
+    borderWidth: 1,
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
   },
-  heroCopy: { gap: 13, marginBottom: 24 },
-  heroLabel: { alignItems: 'center', flexDirection: 'row', gap: 7 },
-  liveDot: { backgroundColor: '#b5f0c5', borderRadius: 4, height: 7, width: 7 },
-  heroLabelText: {
-    color: '#d6f5e0',
-    fontFamily: 'Inter_700Bold',
-    fontSize: 10,
-    letterSpacing: 1.4,
+  searchText: { color: '#16362f', fontFamily: 'Inter_600SemiBold', fontSize: 16 },
+  quick: { alignItems: 'center', flexDirection: 'row', gap: 12, paddingVertical: 8 },
+  quickIcon: {
+    alignItems: 'center',
+    borderRadius: 20,
+    height: 40,
+    justifyContent: 'center',
+    width: 40,
   },
-  heroTitle: {
-    color: '#ffffff',
-    fontFamily: 'Inter_700Bold',
-    fontSize: 31,
-    letterSpacing: -1.2,
+  quickCopy: { flex: 1 },
+  quickTitle: { color: '#16362f', fontFamily: 'Inter_700Bold', fontSize: 15 },
+  quickSub: { color: '#6d7c75', fontFamily: 'Inter_500Medium', fontSize: 12, marginTop: 2 },
+  routeHead: { alignItems: 'center', flexDirection: 'row', gap: 10 },
+  routeFrom: { color: '#6d7c75', fontFamily: 'Inter_500Medium', fontSize: 13 },
+  routeStop: { color: '#138a68', fontFamily: 'Inter_600SemiBold', fontSize: 13, marginTop: 2 },
+  routeTo: { color: '#16362f', fontFamily: 'Inter_700Bold', fontSize: 16, marginTop: 2 },
+  stopBtn: {
+    alignItems: 'center',
+    backgroundColor: '#e8f5ef',
+    borderRadius: 12,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 12,
   },
-  heroSubtitle: {
-    color: '#d5f2df',
-    fontFamily: 'Inter_400Regular',
-    fontSize: 13,
-    lineHeight: 19,
+  stopBtnText: { color: '#138a68', flex: 1, fontFamily: 'Inter_700Bold', fontSize: 14 },
+  clear: {
+    alignItems: 'center',
+    backgroundColor: '#f1f4f2',
+    borderRadius: 18,
+    height: 36,
+    justifyContent: 'center',
+    width: 36,
   },
-  routeCard: { backgroundColor: '#ffffff', borderRadius: 19, padding: 13 },
-  inputRow: {
+  fare: { color: '#138a68', fontFamily: 'Inter_700Bold', fontSize: 18 },
+  payRow: { flexDirection: 'row', gap: 8, marginTop: 4 },
+  payChip: {
+    alignItems: 'center',
+    backgroundColor: '#f1f4f2',
+    borderRadius: 14,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+    justifyContent: 'center',
+    paddingVertical: 10,
+  },
+  payChipOn: { backgroundColor: '#138a68' },
+  payChipText: { color: '#16362f', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  payChipTextOn: { color: '#fff' },
+  error: { color: '#c2410c', fontFamily: 'Inter_500Medium', fontSize: 13 },
+  cta: {
+    alignItems: 'center',
+    backgroundColor: '#138a68',
+    borderRadius: 14,
+    marginTop: 4,
+    paddingVertical: 16,
+  },
+  ctaText: { color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 16 },
+  searchScreen: { backgroundColor: '#fff', flex: 1 },
+  searchHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 10,
-    paddingHorizontal: 2,
-    paddingVertical: 4,
+    paddingHorizontal: 14,
+    paddingTop: 8,
   },
-  pin: {
+  back: {
     alignItems: 'center',
-    borderRadius: 10,
-    height: 28,
-    justifyContent: 'center',
-    width: 28,
-  },
-  inputText: { flex: 1, gap: 3 },
-  inputCaption: { fontFamily: 'Inter_700Bold', fontSize: 9, letterSpacing: 1.1 },
-  inputValue: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
-  inputDivider: { borderBottomWidth: 1, marginLeft: 40, marginVertical: 4 },
-  bookButton: {
-    alignItems: 'center',
+    backgroundColor: '#f1f4f2',
     borderRadius: 12,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 12,
-    paddingHorizontal: 15,
-    paddingVertical: 14,
-  },
-  bookText: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 13 },
-  mapLink: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    gap: 8,
+    height: 42,
     justifyContent: 'center',
-    marginTop: 10,
+    width: 42,
+  },
+  searchInput: {
+    backgroundColor: '#f5f7f6',
+    borderRadius: 12,
+    color: '#16362f',
+    flex: 1,
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 16,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  originHint: {
+    color: '#6d7c75',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 12,
+    paddingHorizontal: 18,
+    paddingTop: 10,
+  },
+  cityChips: { gap: 8, paddingHorizontal: 16, paddingTop: 12, paddingBottom: 4 },
+  cityChip: {
+    backgroundColor: '#f1f4f2',
+    borderRadius: 20,
+    paddingHorizontal: 14,
     paddingVertical: 8,
   },
-  mapLinkText: { fontFamily: 'Inter_700Bold', fontSize: 13 },
-  pressed: { opacity: 0.78 },
-  statsRow: { flexDirection: 'row', gap: 11 },
-  stat: { borderRadius: 17, borderWidth: 1, flex: 1, gap: 4, padding: 14 },
-  statValue: { fontFamily: 'Inter_700Bold', fontSize: 23 },
-  statLabel: { fontFamily: 'Inter_500Medium', fontSize: 11 },
-  rating: { alignItems: 'center', flexDirection: 'row', gap: 4 },
-  section: { gap: 12 },
-  recentList: { gap: 12 },
-  empty: {
+  cityChipOn: { backgroundColor: '#138a68' },
+  cityChipText: { color: '#16362f', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  cityChipTextOn: { color: '#fff' },
+  result: {
     alignItems: 'center',
-    borderRadius: 20,
-    borderWidth: 1,
-    gap: 8,
-    padding: 24,
+    borderBottomColor: '#eef2f0',
+    borderBottomWidth: 1,
+    flexDirection: 'row',
+    gap: 12,
+    paddingVertical: 12,
   },
-  emptyText: { fontFamily: 'Inter_600SemiBold', fontSize: 14 },
 });

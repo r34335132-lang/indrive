@@ -2,8 +2,9 @@ import { Feather } from '@expo/vector-icons';
 import { LinearGradient } from 'expo-linear-gradient';
 import * as Haptics from 'expo-haptics';
 import { Redirect, useRouter } from 'expo-router';
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import {
+  ActivityIndicator,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -21,8 +22,13 @@ import { useAuth } from '@/context/AuthContext';
 import { useBooking } from '@/context/BookingContext';
 import { useTariff } from '@/context/TariffContext';
 import { useColors } from '@/hooks/useColors';
+import {
+  listDriversForReview,
+  setDriverDocsReviewStatus,
+  type PendingDriverReview,
+} from '@/lib/api/driverDocs';
 
-type AdminTab = 'dashboard' | 'tariff' | 'trips';
+type AdminTab = 'dashboard' | 'tariff' | 'docs' | 'trips';
 
 type TariffNumericKey = Exclude<
   keyof ReturnType<typeof useTariff>['tariff'],
@@ -114,8 +120,49 @@ export default function AdminScreen() {
   const [tab, setTab] = useState<AdminTab>('dashboard');
   const [draft, setDraft] = useState<Record<string, string>>({});
   const [selectedTrip, setSelectedTrip] = useState<Trip | null>(null);
+  const [drivers, setDrivers] = useState<PendingDriverReview[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [docsBusyId, setDocsBusyId] = useState<string | null>(null);
+
+  const loadDrivers = async () => {
+    setDocsLoading(true);
+    try {
+      const rows = await listDriversForReview();
+      setDrivers(rows);
+    } catch {
+      setDrivers([]);
+    } finally {
+      setDocsLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (tab === 'docs') void loadDrivers();
+  }, [tab]);
 
   const trips = useMemo(() => allTrips.map(normalizeTrip), [allTrips]);
+
+  const pendingDocs = useMemo(
+    () => drivers.filter((d) => d.reviewStatus === 'pending'),
+    [drivers],
+  );
+
+  const reviewDriver = async (userId: string, status: 'approved' | 'rejected') => {
+    setDocsBusyId(userId);
+    try {
+      await setDriverDocsReviewStatus(
+        userId,
+        status,
+        status === 'rejected' ? 'Documentos rechazados. Vuelve a subirlos.' : null,
+      );
+      await loadDrivers();
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+    } catch {
+      Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+    } finally {
+      setDocsBusyId(null);
+    }
+  };
 
   const stats = useMemo(() => {
     const completed = trips.filter((t) => t.status === 'Completado');
@@ -130,8 +177,8 @@ export default function AdminScreen() {
       ? rated.reduce((sum, t) => sum + (t.rating ?? 0), 0) / rated.length
       : 0;
 
-    const byVehicle = ['Económico', 'Comfort', 'Premium', 'Van'].map((vehicle) => ({
-      label: vehicle.slice(0, 6),
+    const byVehicle = ['Sedan', 'SUV'].map((vehicle) => ({
+      label: vehicle,
       value: completed.filter((t) => t.vehicle === vehicle).length,
     }));
 
@@ -171,7 +218,13 @@ export default function AdminScreen() {
     };
   }, [trips]);
 
-  if (isReady && (!user || role !== 'admin')) {
+  if (isReady && role === 'passenger') {
+    return <Redirect href="/(tabs)" />;
+  }
+  if (isReady && role === 'driver') {
+    return <Redirect href="/driver" />;
+  }
+  if (isReady && !user) {
     return <Redirect href="/" />;
   }
   const getDraftValue = (key: TariffNumericKey) => {
@@ -185,7 +238,7 @@ export default function AdminScreen() {
     const value = Number.parseFloat(raw);
     if (Number.isNaN(value) || value < 0) return;
     if (key === 'surgeMultiplier' && value < 1) return;
-    const next = key === 'baseFare' || key === 'minFare' ? Math.max(30, value) : value;
+    const next = key === 'baseFare' || key === 'minFare' ? Math.max(15, value) : value;
     await updateTariff({ [key]: next });
     setDraft((current) => {
       const next = { ...current };
@@ -230,6 +283,7 @@ export default function AdminScreen() {
         {([
           { id: 'dashboard', icon: 'pie-chart', label: 'Resumen' },
           { id: 'tariff', icon: 'sliders', label: 'Tarifario' },
+          { id: 'docs', icon: 'file-text', label: 'Docs' },
           { id: 'trips', icon: 'list', label: 'Viajes' },
         ] as const).map((item) => (
           <Pressable
@@ -388,6 +442,99 @@ export default function AdminScreen() {
           </>
         ) : null}
 
+        {tab === 'docs' ? (
+          <>
+            <View style={[styles.tripsSummary, { backgroundColor: colors.secondary }]}>
+              <Text style={[styles.tripsSummaryTitle, { color: colors.primary }]}>
+                {pendingDocs.length} pendientes · {drivers.length} con docs completos
+              </Text>
+              <Text style={[styles.tripsSummarySub, { color: colors.mutedForeground }]}>
+                Aprueba o rechaza documentos de verificación del conductor
+              </Text>
+            </View>
+
+            {docsLoading ? (
+              <ActivityIndicator color={colors.primary} style={{ marginVertical: 24 }} />
+            ) : drivers.length === 0 ? (
+              <Text style={[styles.tripsSummarySub, { color: colors.mutedForeground, textAlign: 'center' }]}>
+                No hay conductores con documentos completos aún.
+              </Text>
+            ) : (
+              drivers.map((driver) => (
+                <View
+                  key={driver.userId}
+                  style={[styles.tripCard, { backgroundColor: colors.card, borderColor: colors.border }]}
+                >
+                  <View style={styles.tripTop}>
+                    <View
+                      style={[
+                        styles.statusPill,
+                        {
+                          backgroundColor:
+                            driver.reviewStatus === 'approved'
+                              ? '#e7f4ed'
+                              : driver.reviewStatus === 'rejected'
+                                ? '#fee2e2'
+                                : '#fff4e8',
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          styles.tripStatus,
+                          {
+                            color:
+                              driver.reviewStatus === 'approved'
+                                ? '#138a68'
+                                : driver.reviewStatus === 'rejected'
+                                  ? '#b91c1c'
+                                  : '#d88d2e',
+                          },
+                        ]}
+                      >
+                        {driver.reviewStatus === 'approved'
+                          ? 'Aprobado'
+                          : driver.reviewStatus === 'rejected'
+                            ? 'Rechazado'
+                            : 'Pendiente'}
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={[styles.tripRoute, { color: colors.foreground }]}>{driver.name}</Text>
+                  <Text style={[styles.tripMeta, { color: colors.mutedForeground }]}>
+                    {driver.email} · {driver.phone || 'sin teléfono'} · {driver.plate}
+                  </Text>
+                  <Text style={[styles.tripMeta, { color: colors.mutedForeground }]}>
+                    INE {driver.docs.ineFront && driver.docs.ineBack ? '✓' : '·'} · Licencia{' '}
+                    {driver.docs.license ? '✓' : '·'} · Circulación {driver.docs.circulation ? '✓' : '·'} ·
+                    Seguro {driver.docs.insurance ? '✓' : '·'}
+                  </Text>
+                  {driver.reviewStatus === 'pending' ? (
+                    <View style={styles.docsActions}>
+                      <Pressable
+                        disabled={docsBusyId === driver.userId}
+                        onPress={() => void reviewDriver(driver.userId, 'approved')}
+                        style={[styles.docsBtn, { backgroundColor: '#138a68' }]}
+                      >
+                        <Text style={styles.docsBtnText}>
+                          {docsBusyId === driver.userId ? '…' : 'Aprobar'}
+                        </Text>
+                      </Pressable>
+                      <Pressable
+                        disabled={docsBusyId === driver.userId}
+                        onPress={() => void reviewDriver(driver.userId, 'rejected')}
+                        style={[styles.docsBtn, { backgroundColor: '#b91c1c' }]}
+                      >
+                        <Text style={styles.docsBtnText}>Rechazar</Text>
+                      </Pressable>
+                    </View>
+                  ) : null}
+                </View>
+              ))
+            )}
+          </>
+        ) : null}
+
         {tab === 'trips' ? (
           <>
             <View style={[styles.tripsSummary, { backgroundColor: colors.secondary }]}>
@@ -432,6 +579,13 @@ export default function AdminScreen() {
                   <PricePill label="Conductor" value={formatMoney(trip.driverNet)} colors={colors} />
                   <PricePill label="App" value={formatMoney(trip.appNet)} colors={colors} />
                 </View>
+                <Text style={[styles.tripMeta, { color: colors.mutedForeground }]}>
+                  Pago:{' '}
+                  {trip.paymentMethod === 'card' ? 'Tarjeta' : 'Efectivo'}
+                  {trip.paymentStatus && trip.paymentStatus !== 'none'
+                    ? ` · ${trip.paymentStatus}`
+                    : ''}
+                </Text>
 
                 {typeof trip.rating === 'number' ? (
                   <View style={styles.tripRatingRow}>
@@ -709,6 +863,14 @@ const styles = StyleSheet.create({
   tripRoute: { fontFamily: 'Inter_700Bold', fontSize: 14 },
   tripMeta: { fontFamily: 'Inter_400Regular', fontSize: 11 },
   tripPrices: { flexDirection: 'row', gap: 6, marginTop: 4 },
+  docsActions: { flexDirection: 'row', gap: 8, marginTop: 12 },
+  docsBtn: {
+    alignItems: 'center',
+    borderRadius: 12,
+    flex: 1,
+    paddingVertical: 10,
+  },
+  docsBtnText: { color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 13 },
   pricePill: { borderRadius: 10, flex: 1, gap: 2, paddingHorizontal: 8, paddingVertical: 6 },
   pricePillLabel: { fontFamily: 'Inter_500Medium', fontSize: 9 },
   pricePillValue: { fontFamily: 'Inter_700Bold', fontSize: 12 },

@@ -4,7 +4,6 @@ import {
   emptyDocs,
   fetchDriverDocs,
   fetchProfile,
-  loginAsDemo,
   loginWithPassword,
   logoutSession,
   registerDriver,
@@ -15,6 +14,8 @@ import {
   type RegisterDriverInput,
   type RegisterPassengerInput,
 } from '@/lib/api/auth';
+import { deleteMyAccount } from '@/lib/api/account';
+import { markBlockFeeSatisfied, uploadDriverDocument } from '@/lib/api/driverDocs';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import type { DriverDocs, DriverDocumentKey, Profile, UserRole } from '@/types';
 
@@ -28,14 +29,18 @@ type AuthContextValue = {
   configured: boolean;
   driverDocs: DriverDocs;
   docsComplete: boolean;
+  docsApproved: boolean;
+  blockFeeSatisfied: boolean;
   login: (email: string, password: string) => Promise<void>;
-  loginAs: (role: UserRole) => Promise<void>;
   registerAsPassenger: (input: RegisterPassengerInput) => Promise<void>;
   registerAsDriver: (input: RegisterDriverInput) => Promise<void>;
   logout: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
   switchRole: (role: UserRole) => Promise<void>;
   toggleDocument: (key: DriverDocumentKey) => Promise<void>;
+  uploadDocument: (key: DriverDocumentKey) => Promise<void>;
   setAllDocumentsUploaded: () => Promise<void>;
+  satisfyBlockFee: () => Promise<void>;
   refreshProfile: () => Promise<void>;
 };
 
@@ -56,18 +61,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let mounted = true;
 
-    supabase.auth.getSession().then(async ({ data }) => {
-      if (!mounted) return;
-      setSession(data.session);
-      if (data.session?.user) {
-        try {
-          await loadUserData(data.session.user.id);
-        } catch {
-          setProfile(null);
+    supabase.auth
+      .getSession()
+      .then(async ({ data }) => {
+        if (!mounted) return;
+        setSession(data.session);
+        if (data.session?.user) {
+          try {
+            await loadUserData(data.session.user.id);
+          } catch {
+            setProfile(null);
+          }
         }
-      }
-      setIsReady(true);
-    });
+        setIsReady(true);
+      })
+      .catch(() => {
+        if (mounted) setIsReady(true);
+      });
 
     const { data: sub } = supabase.auth.onAuthStateChange(async (_event, nextSession) => {
       setSession(nextSession);
@@ -93,11 +103,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await loginWithPassword(email, password);
   }, []);
 
-  const loginAs = useCallback(async (role: UserRole) => {
-    const key = role === 'passenger' ? 'passenger' : role === 'driver' ? 'driver' : 'admin';
-    await loginAsDemo(key);
-  }, []);
-
   const registerAsPassenger = useCallback(async (input: RegisterPassengerInput) => {
     await registerPassenger(input);
   }, []);
@@ -108,6 +113,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const logout = useCallback(async () => {
     await logoutSession();
+    setProfile(null);
+    setDriverDocs(emptyDocs);
+  }, []);
+
+  const deleteAccount = useCallback(async () => {
+    await deleteMyAccount();
+    setSession(null);
     setProfile(null);
     setDriverDocs(emptyDocs);
   }, []);
@@ -133,10 +145,25 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [driverDocs, profile],
   );
 
+  const uploadDocument = useCallback(
+    async (key: DriverDocumentKey) => {
+      if (!profile) return;
+      const next = await uploadDriverDocument(profile.id, key);
+      setDriverDocs(next);
+    },
+    [profile],
+  );
+
   const setAllDocumentsUploaded = useCallback(async () => {
     if (!profile) return;
     const next = await setAllDriverDocsUploaded(profile.id);
     setDriverDocs(next);
+  }, [profile]);
+
+  const satisfyBlockFee = useCallback(async () => {
+    if (!profile) return;
+    await markBlockFeeSatisfied(profile.id);
+    setProfile({ ...profile, blockFeeSatisfied: true });
   }, [profile]);
 
   const refreshProfile = useCallback(async () => {
@@ -145,6 +172,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, [loadUserData, session?.user]);
 
   const docsComplete = Boolean(driverDocs.complete);
+  const docsApproved = driverDocs.reviewStatus === 'approved';
+  const blockFeeSatisfied = Boolean(profile?.blockFeeSatisfied);
 
   const value = useMemo(
     () => ({
@@ -156,14 +185,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       configured: isSupabaseConfigured,
       driverDocs,
       docsComplete,
+      docsApproved,
+      blockFeeSatisfied,
       login,
-      loginAs,
       registerAsPassenger,
       registerAsDriver,
       logout,
+      deleteAccount,
       switchRole,
       toggleDocument,
+      uploadDocument,
       setAllDocumentsUploaded,
+      satisfyBlockFee,
       refreshProfile,
     }),
     [
@@ -172,14 +205,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       isReady,
       driverDocs,
       docsComplete,
+      docsApproved,
+      blockFeeSatisfied,
       login,
-      loginAs,
       registerAsPassenger,
       registerAsDriver,
       logout,
+      deleteAccount,
       switchRole,
       toggleDocument,
+      uploadDocument,
       setAllDocumentsUploaded,
+      satisfyBlockFee,
       refreshProfile,
     ],
   );

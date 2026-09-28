@@ -1,4 +1,10 @@
-import type { Profile, DriverDocs, Ride, RideLocation, TariffRow, Trip, UserRole } from '@/types';
+import type { Profile, DriverDocs, Ride, RideLocation, TariffRow, Trip, UserRole, VehicleType } from '@/types';
+
+/** Legacy DB enums map to Sedan; only Sedan/SUV are offered in-app. */
+export function normalizeVehicle(value: string | null | undefined): VehicleType {
+  if (value === 'SUV') return 'SUV';
+  return 'Sedan';
+}
 
 type ProfileRow = {
   id: string;
@@ -18,6 +24,7 @@ type ProfileRow = {
   vehicle_model: string | null;
   vehicle_color: string | null;
   vehicle_plate: string | null;
+  block_fee_satisfied?: boolean | null;
 };
 
 type RideRow = {
@@ -31,7 +38,7 @@ type RideRow = {
   origin_lng: number;
   destination_lat: number;
   destination_lng: number;
-  vehicle: Ride['vehicle'];
+  vehicle: string;
   price: number;
   driver_net: number;
   app_net: number;
@@ -48,6 +55,11 @@ type RideRow = {
   comment: string | null;
   scheduled_date: string | null;
   scheduled_time: string | null;
+  payment_method?: string | null;
+  payment_status?: string | null;
+  mp_preference_id?: string | null;
+  mp_payment_id?: string | null;
+  paid_at?: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -82,6 +94,8 @@ type DocsRow = {
   circulation: boolean;
   insurance: boolean;
   complete: boolean;
+  review_status?: string | null;
+  review_note?: string | null;
 };
 
 type LocRow = {
@@ -111,6 +125,7 @@ export function mapProfile(row: ProfileRow): Profile {
     vehicleModel: row.vehicle_model ?? undefined,
     vehicleColor: row.vehicle_color ?? undefined,
     vehiclePlate: row.vehicle_plate ?? undefined,
+    blockFeeSatisfied: Boolean(row.block_fee_satisfied),
   };
 }
 
@@ -123,6 +138,8 @@ export function mapDocs(row: DocsRow | null): DriverDocs {
       circulation: false,
       insurance: false,
       complete: false,
+      reviewStatus: 'pending',
+      reviewNote: null,
     };
   }
   return {
@@ -132,6 +149,8 @@ export function mapDocs(row: DocsRow | null): DriverDocs {
     circulation: row.circulation,
     insurance: row.insurance,
     complete: row.complete,
+    reviewStatus: (row.review_status as DriverDocs['reviewStatus']) || 'pending',
+    reviewNote: row.review_note ?? null,
   };
 }
 
@@ -143,19 +162,19 @@ export function mapRide(row: RideRow): Ride {
     status: row.status,
     origin: row.origin,
     destination: row.destination,
-    originLat: row.origin_lat,
-    originLng: row.origin_lng,
-    destinationLat: row.destination_lat,
-    destinationLng: row.destination_lng,
-    vehicle: row.vehicle,
-    price: Number(row.price),
-    driverNet: Number(row.driver_net),
-    appNet: Number(row.app_net),
-    airportToll: Number(row.airport_toll),
-    distanceKm: Number(row.distance_km),
+    originLat: Number(row.origin_lat),
+    originLng: Number(row.origin_lng),
+    destinationLat: Number(row.destination_lat),
+    destinationLng: Number(row.destination_lng),
+    vehicle: normalizeVehicle(row.vehicle),
+    price: Number(row.price) || 0,
+    driverNet: Number(row.driver_net) || 0,
+    appNet: Number(row.app_net) || 0,
+    airportToll: Number(row.airport_toll) || 0,
+    distanceKm: Number(row.distance_km) || 0,
     durationLabel: row.duration_label,
     passengerName: row.passenger_name,
-    passengerRating: Number(row.passenger_rating),
+    passengerRating: Number(row.passenger_rating) || 5,
     driverName: row.driver_name,
     driverRating: row.driver_rating != null ? Number(row.driver_rating) : null,
     driverCar: row.driver_car,
@@ -164,6 +183,11 @@ export function mapRide(row: RideRow): Ride {
     comment: row.comment,
     scheduledDate: row.scheduled_date,
     scheduledTime: row.scheduled_time,
+    paymentMethod: (row.payment_method as Ride['paymentMethod']) || 'cash',
+    paymentStatus: (row.payment_status as Ride['paymentStatus']) || 'none',
+    mpPreferenceId: row.mp_preference_id ?? null,
+    mpPaymentId: row.mp_payment_id ?? null,
+    paidAt: row.paid_at ?? null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -237,6 +261,7 @@ export function rideToTrip(ride: Ride, viewer: 'passenger' | 'driver'): Trip {
     destination: ride.destination,
     date,
     time,
+    createdAt: ride.createdAt,
     vehicle: ride.vehicle,
     price: ride.price,
     driverNet: ride.driverNet,
@@ -251,5 +276,7 @@ export function rideToTrip(ride: Ride, viewer: 'passenger' | 'driver'): Trip {
     role: viewer,
     passengerName: ride.passengerName,
     driverName: ride.driverName ?? '—',
+    paymentMethod: ride.paymentMethod,
+    paymentStatus: ride.paymentStatus,
   };
 }

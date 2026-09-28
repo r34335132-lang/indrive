@@ -93,7 +93,7 @@ export type Database = {
           origin_lng: number;
           destination_lat: number;
           destination_lng: number;
-          vehicle: 'Económico' | 'Comfort' | 'Premium' | 'Van';
+          vehicle: 'Sedan' | 'SUV' | 'Económico' | 'Comfort' | 'Premium' | 'Van';
           price: number;
           driver_net: number;
           app_net: number;

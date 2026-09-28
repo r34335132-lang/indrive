@@ -1,6 +1,7 @@
 import * as Haptics from 'expo-haptics';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import {
+  closeRealtimeChannel,
   fetchRideMessages,
   sendRideMessage,
   subscribeRideMessages,
@@ -41,7 +42,7 @@ export function useRideChat(rideId: string | undefined, meId: string | undefined
 
     return () => {
       cancelled = true;
-      channel.unsubscribe();
+      closeRealtimeChannel(channel);
     };
   }, [meId, rideId]);
 

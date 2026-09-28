@@ -34,6 +34,7 @@ function RootLayoutNav() {
       <Stack.Screen name="map" options={{ headerShown: false }} />
       <Stack.Screen name="ride-map" options={{ headerShown: false }} />
       <Stack.Screen name="admin" options={{ headerShown: false }} />
+      <Stack.Screen name="pay" options={{ headerShown: false }} />
     </Stack>
   );
 }

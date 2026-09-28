@@ -1,6 +1,7 @@
 import { mapRide, mapLocation } from '@/lib/api/mappers';
+import { closeRealtimeChannel, openRealtimeChannel } from '@/lib/api/realtime';
 import { supabase } from '@/lib/supabase';
-import type { Profile, Ride, RideLocation, RideStatus, VehicleType } from '@/types';
+import type { Profile, Ride, RideLocation, RideStatus, VehicleType, PaymentMethod } from '@/types';
 import type { RealtimeChannel } from '@supabase/supabase-js';
 
 export type CreateRideInput = {
@@ -20,6 +21,7 @@ export type CreateRideInput = {
   durationLabel: string;
   scheduledDate?: string;
   scheduledTime?: string;
+  paymentMethod?: PaymentMethod;
 };
 
 export async function createRide(input: CreateRideInput): Promise<Ride> {
@@ -45,6 +47,8 @@ export async function createRide(input: CreateRideInput): Promise<Ride> {
       passenger_rating: input.passenger.rating,
       scheduled_date: input.scheduledDate ?? null,
       scheduled_time: input.scheduledTime ?? null,
+      payment_method: input.paymentMethod ?? 'cash',
+      payment_status: input.paymentMethod === 'card' ? 'pending' : 'none',
     })
     .select('*')
     .single();
@@ -59,13 +63,18 @@ export async function fetchRide(id: string): Promise<Ride | null> {
 }
 
 export async function fetchOpenRides(): Promise<Ride[]> {
+  const since = new Date(Date.now() - 2 * 60 * 60 * 1000).toISOString();
   const { data, error } = await supabase
     .from('rides')
     .select('*')
     .eq('status', 'searching')
+    .gte('created_at', since)
     .order('created_at', { ascending: false });
   if (error) throw error;
-  return (data ?? []).map(mapRide);
+  // Solo mostrar viajes en efectivo o tarjeta ya pagada
+  return (data ?? [])
+    .map(mapRide)
+    .filter((ride) => ride.paymentMethod === 'cash' || ride.paymentStatus === 'approved');
 }
 
 export async function fetchMyRides(userId: string, as: 'passenger' | 'driver' | 'all'): Promise<Ride[]> {
@@ -120,8 +129,9 @@ export async function acceptRide(rideId: string, driver: Profile): Promise<Ride>
     .eq('id', rideId)
     .eq('status', 'searching')
     .select('*')
-    .single();
+    .maybeSingle();
   if (error) throw error;
+  if (!data) throw new Error('Este viaje ya lo tomó otro conductor');
   return mapRide(data);
 }
 
@@ -129,6 +139,8 @@ export async function updateRideStatus(rideId: string, status: RideStatus): Prom
   const patch: Record<string, unknown> = { status };
   if (status === 'in_progress') patch.started_at = new Date().toISOString();
   if (status === 'completed') patch.completed_at = new Date().toISOString();
+  if (status === 'arrived_pickup') patch.arrived_at = new Date().toISOString();
+  if (status === 'accepted') patch.accepted_at = new Date().toISOString();
 
   const { data, error } = await supabase.from('rides').update(patch).eq('id', rideId).select('*').single();
   if (error) throw error;
@@ -137,6 +149,24 @@ export async function updateRideStatus(rideId: string, status: RideStatus): Prom
 
 export async function cancelRide(rideId: string): Promise<Ride> {
   return updateRideStatus(rideId, 'cancelled');
+}
+
+export async function updateRideFare(
+  rideId: string,
+  values: { price: number; driverNet: number; appNet: number },
+): Promise<Ride> {
+  const { data, error } = await supabase
+    .from('rides')
+    .update({
+      price: values.price,
+      driver_net: values.driverNet,
+      app_net: values.appNet,
+    })
+    .eq('id', rideId)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return mapRide(data);
 }
 
 export async function upsertRideLocation(
@@ -176,8 +206,8 @@ export async function fetchRideLocation(rideId: string): Promise<RideLocation | 
 export function subscribeRides(
   onChange: (payload: { eventType: string; new: Ride | null; old: Ride | null }) => void,
 ): RealtimeChannel {
-  return supabase
-    .channel('rides-feed')
+  const channel = openRealtimeChannel('rides-feed');
+  channel
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'rides' },
@@ -190,14 +220,15 @@ export function subscribeRides(
       },
     )
     .subscribe();
+  return channel;
 }
 
 export function subscribeRideById(
   rideId: string,
   onChange: (ride: Ride) => void,
 ): RealtimeChannel {
-  return supabase
-    .channel(`ride-${rideId}`)
+  const channel = openRealtimeChannel(`ride-${rideId}`);
+  channel
     .on(
       'postgres_changes',
       { event: 'UPDATE', schema: 'public', table: 'rides', filter: `id=eq.${rideId}` },
@@ -206,14 +237,15 @@ export function subscribeRideById(
       },
     )
     .subscribe();
+  return channel;
 }
 
 export function subscribeRideLocation(
   rideId: string,
   onChange: (loc: RideLocation) => void,
 ): RealtimeChannel {
-  return supabase
-    .channel(`ride-loc-${rideId}`)
+  const channel = openRealtimeChannel(`ride-loc-${rideId}`);
+  channel
     .on(
       'postgres_changes',
       { event: '*', schema: 'public', table: 'ride_locations', filter: `ride_id=eq.${rideId}` },
@@ -222,4 +254,7 @@ export function subscribeRideLocation(
       },
     )
     .subscribe();
+  return channel;
 }
+
+export { closeRealtimeChannel };

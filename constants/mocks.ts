@@ -16,7 +16,8 @@ export function normalizeTrip(raw: Partial<Trip> & Pick<Trip, 'id' | 'origin' | 
     destination: raw.destination,
     date: raw.date ?? '—',
     time: raw.time ?? '—',
-    vehicle: raw.vehicle ?? 'Comfort',
+    createdAt: raw.createdAt ?? new Date().toISOString(),
+    vehicle: raw.vehicle === 'SUV' ? 'SUV' : 'Sedan',
     price,
     driverNet,
     appNet,
@@ -30,6 +31,8 @@ export function normalizeTrip(raw: Partial<Trip> & Pick<Trip, 'id' | 'origin' | 
     role: raw.role ?? 'passenger',
     passengerName: raw.passengerName ?? raw.counterparty ?? '—',
     driverName: raw.driverName ?? '—',
+    paymentMethod: raw.paymentMethod,
+    paymentStatus: raw.paymentStatus,
   };
 }
 

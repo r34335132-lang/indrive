@@ -12,6 +12,7 @@ create index if not exists ride_messages_ride_idx
 
 alter table public.ride_messages enable row level security;
 
+drop policy if exists "ride_messages_select" on public.ride_messages;
 create policy "ride_messages_select"
   on public.ride_messages for select
   using (
@@ -26,6 +27,7 @@ create policy "ride_messages_select"
     )
   );
 
+drop policy if exists "ride_messages_insert" on public.ride_messages;
 create policy "ride_messages_insert"
   on public.ride_messages for insert
   with check (
@@ -41,4 +43,15 @@ create policy "ride_messages_insert"
 
 alter table public.ride_messages replica identity full;
 
-alter publication supabase_realtime add table public.ride_messages;
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'ride_messages'
+  ) then
+    alter publication supabase_realtime add table public.ride_messages;
+  end if;
+end $$;
