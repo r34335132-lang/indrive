@@ -15,7 +15,11 @@ import {
   type RegisterPassengerInput,
 } from '@/lib/api/auth';
 import { deleteMyAccount } from '@/lib/api/account';
-import { markBlockFeeSatisfied, uploadDriverDocument } from '@/lib/api/driverDocs';
+import {
+  markBlockFeeSatisfied,
+  uploadDriverDocument,
+  uploadProfilePhoto,
+} from '@/lib/api/driverDocs';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import type { DriverDocs, DriverDocumentKey, Profile, UserRole } from '@/types';
 
@@ -39,6 +43,7 @@ type AuthContextValue = {
   switchRole: (role: UserRole) => Promise<void>;
   toggleDocument: (key: DriverDocumentKey) => Promise<void>;
   uploadDocument: (key: DriverDocumentKey) => Promise<void>;
+  uploadPhoto: (source: 'camera' | 'library') => Promise<void>;
   setAllDocumentsUploaded: () => Promise<void>;
   satisfyBlockFee: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -154,6 +159,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [profile],
   );
 
+  const uploadPhoto = useCallback(
+    async (source: 'camera' | 'library') => {
+      if (!profile) return;
+      const avatarUrl = await uploadProfilePhoto(profile.id, source);
+      setProfile({ ...profile, avatarUrl });
+    },
+    [profile],
+  );
+
   const setAllDocumentsUploaded = useCallback(async () => {
     if (!profile) return;
     const next = await setAllDriverDocsUploaded(profile.id);
@@ -195,6 +209,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       switchRole,
       toggleDocument,
       uploadDocument,
+      uploadPhoto,
       setAllDocumentsUploaded,
       satisfyBlockFee,
       refreshProfile,
@@ -215,6 +230,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       switchRole,
       toggleDocument,
       uploadDocument,
+      uploadPhoto,
       setAllDocumentsUploaded,
       satisfyBlockFee,
       refreshProfile,

@@ -45,6 +45,7 @@ export type ActiveRide = {
   driverRating: number;
   driverCar: string;
   driverPlate: string;
+  driverPhotoUrl: string | null;
   date: string;
   time: string;
   passengerId: string;
@@ -139,6 +140,7 @@ function toActiveRide(ride: Ride): ActiveRide {
     driverRating: ride.driverRating ?? 5,
     driverCar: ride.driverCar ?? 'Vehículo inride',
     driverPlate: ride.driverPlate ?? '—',
+    driverPhotoUrl: ride.driverPhotoUrl ?? null,
     date: ride.scheduledDate ?? 'Hoy',
     time: ride.scheduledTime ?? '',
     passengerId: ride.passengerId,

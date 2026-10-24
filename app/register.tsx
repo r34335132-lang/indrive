@@ -12,7 +12,9 @@ import {
   View,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LegalLinks } from '@/components/LegalLinks';
 import { useAuth } from '@/context/AuthContext';
+import { ageOn, maskBirthdate, MIN_AGE, parseBirthdate, toIsoDate } from '@/lib/age';
 import { useColors } from '@/hooks/useColors';
 import type { DriverTier } from '@/constants/pricing';
 import { DRIVER_TIER_LABELS } from '@/constants/pricing';
@@ -31,6 +33,8 @@ export default function RegisterScreen() {
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
+  const [birthText, setBirthText] = useState('');
+  const [adultConfirmed, setAdultConfirmed] = useState(false);
   const [vehicleMake, setVehicleMake] = useState('');
   const [vehicleModel, setVehicleModel] = useState('');
   const [vehicleColor, setVehicleColor] = useState('');
@@ -39,12 +43,24 @@ export default function RegisterScreen() {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
+  const birthDate = useMemo(() => parseBirthdate(birthText), [birthText]);
+  const age = birthDate ? ageOn(birthDate) : null;
+  const isAdult = age !== null && age >= MIN_AGE;
+  const birthError =
+    birthText.length === 10 && !birthDate
+      ? 'Fecha no válida'
+      : age !== null && age < MIN_AGE
+        ? `Debes ser mayor de ${MIN_AGE} años para usar inride.`
+        : null;
+
   const canSubmit = useMemo(() => {
     const base =
       name.trim().length > 2 &&
       email.includes('@') &&
       phone.trim().length >= 8 &&
-      password.length >= 6;
+      password.length >= 6 &&
+      isAdult &&
+      adultConfirmed;
     if (!base) return false;
     if (mode === 'passenger') return true;
     return (
@@ -53,16 +69,29 @@ export default function RegisterScreen() {
       vehicleColor.trim().length > 1 &&
       vehiclePlate.trim().length > 3
     );
-  }, [email, mode, name, password, phone, vehicleColor, vehicleMake, vehicleModel, vehiclePlate]);
+  }, [
+    adultConfirmed,
+    email,
+    isAdult,
+    mode,
+    name,
+    password,
+    phone,
+    vehicleColor,
+    vehicleMake,
+    vehicleModel,
+    vehiclePlate,
+  ]);
 
   const submit = async () => {
-    if (!canSubmit || busy) return;
+    if (!canSubmit || busy || !birthDate) return;
     setError(null);
     setBusy(true);
     Haptics.impactAsync(Haptics.ImpactFeedbackStyle.Medium);
+    const birthdate = toIsoDate(birthDate);
     try {
       if (mode === 'passenger') {
-        await registerAsPassenger({ name, email, phone, password });
+        await registerAsPassenger({ name, email, phone, password, birthdate });
         router.replace('/(tabs)');
       } else {
         await registerAsDriver({
@@ -70,6 +99,7 @@ export default function RegisterScreen() {
           email,
           phone,
           password,
+          birthdate,
           vehicleMake,
           vehicleModel,
           vehicleColor,
@@ -163,6 +193,40 @@ export default function RegisterScreen() {
           placeholder="Mínimo 6 caracteres"
           secureTextEntry
         />
+        <Field
+          label="Fecha de nacimiento"
+          value={birthText}
+          onChangeText={(text) => setBirthText(maskBirthdate(text))}
+          colors={colors}
+          placeholder="DD/MM/AAAA"
+          keyboardType="number-pad"
+          maxLength={10}
+        />
+        {birthError ? <Text style={styles.error}>{birthError}</Text> : null}
+
+        <Pressable
+          onPress={() => setAdultConfirmed((v) => !v)}
+          style={styles.checkRow}
+          accessibilityRole="checkbox"
+          accessibilityState={{ checked: adultConfirmed }}
+        >
+          <View
+            style={[
+              styles.checkBox,
+              {
+                backgroundColor: adultConfirmed ? colors.primary : colors.card,
+                borderColor: adultConfirmed ? colors.primary : colors.border,
+              },
+            ]}
+          >
+            {adultConfirmed ? <Feather name="check" size={14} color="#fff" /> : null}
+          </View>
+          <Text style={[styles.checkText, { color: colors.foreground }]}>
+            Confirmo que soy mayor de {MIN_AGE} años y acepto los Términos y la Política de
+            Privacidad.
+          </Text>
+        </Pressable>
+        <LegalLinks />
 
         {mode === 'driver' ? (
           <>
@@ -300,6 +364,17 @@ const styles = StyleSheet.create({
     paddingVertical: 12,
   },
   hint: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 },
+  checkRow: { alignItems: 'flex-start', flexDirection: 'row', gap: 10, marginTop: 4 },
+  checkBox: {
+    alignItems: 'center',
+    borderRadius: 7,
+    borderWidth: 1.5,
+    height: 22,
+    justifyContent: 'center',
+    marginTop: 1,
+    width: 22,
+  },
+  checkText: { flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, lineHeight: 18 },
   error: { color: '#dc2626', fontFamily: 'Inter_500Medium', fontSize: 12 },
   submit: {
     alignItems: 'center',

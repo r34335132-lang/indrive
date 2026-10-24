@@ -65,6 +65,8 @@ export type Profile = {
   vehicleModel?: string;
   vehicleColor?: string;
   vehiclePlate?: string;
+  /** URL pública de la foto de perfil (bucket `avatars`). */
+  avatarUrl?: string;
   /** Ya cubrió el bloque de sistema ($300) por depósito o ganancias. */
   blockFeeSatisfied?: boolean;
 };
@@ -102,6 +104,7 @@ export type Ride = {
   driverRating: number | null;
   driverCar: string | null;
   driverPlate: string | null;
+  driverPhotoUrl: string | null;
   rating: number | null;
   comment: string | null;
   scheduledDate: string | null;

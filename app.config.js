@@ -11,19 +11,19 @@ export default {
     splash: {
       image: './assets/images/splash-icon.png',
       resizeMode: 'contain',
-      backgroundColor: '#16362f',
+      backgroundColor: '#ffffff',
     },
     ios: {
       supportsTablet: false,
-      bundleIdentifier: 'com.inrideDgo.app',
+      bundleIdentifier: 'com.inridedgo.app',
       infoPlist: {
         ITSAppUsesNonExemptEncryption: false,
         NSLocationWhenInUseUsageDescription:
           'inride usa tu ubicación solo para mostrar la ruta del viaje y conectar pasajero con conductor mientras usas la app.',
         NSCameraUsageDescription:
-          'inride usa la cámara únicamente para que el conductor suba documentos de verificación (INE, licencia, etc.).',
+          'inride usa la cámara para que el conductor se tome su foto de perfil (la ve el pasajero) y fotografíe sus documentos de verificación (INE, licencia, etc.).',
         NSPhotoLibraryUsageDescription:
-          'inride accede a tus fotos únicamente para subir documentos de verificación del conductor. No usamos tus fotos con otros fines.',
+          'inride accede a tus fotos únicamente para que el conductor elija su foto de perfil y sus documentos de verificación. No usamos tus fotos con otros fines.',
         NSPhotoLibraryAddUsageDescription:
           'inride no guarda fotos en tu galería; este permiso solo se declara por compatibilidad del selector de imágenes.',
       },
@@ -40,19 +40,20 @@ export default {
       package: 'com.inride.app',
       adaptiveIcon: {
         foregroundImage: './assets/images/adaptive-icon.png',
-        backgroundColor: '#16362f',
+        backgroundColor: '#ffffff',
       },
-      permissions: [
-        'ACCESS_COARSE_LOCATION',
-        'ACCESS_FINE_LOCATION',
-        'CAMERA',
-        'READ_MEDIA_IMAGES',
-      ],
+      permissions: ['ACCESS_COARSE_LOCATION', 'ACCESS_FINE_LOCATION', 'CAMERA'],
+      // Documentos del conductor se eligen con el selector de fotos del sistema (Photo Picker),
+      // que no requiere permisos de almacenamiento (política de Google Play, API 33+).
       blockedPermissions: [
-        'RECORD_AUDIO',
-        'ACCESS_BACKGROUND_LOCATION',
-        'READ_EXTERNAL_STORAGE',
-        'WRITE_EXTERNAL_STORAGE',
+        'android.permission.RECORD_AUDIO',
+        'android.permission.ACCESS_BACKGROUND_LOCATION',
+        'android.permission.READ_EXTERNAL_STORAGE',
+        'android.permission.WRITE_EXTERNAL_STORAGE',
+        'android.permission.READ_MEDIA_IMAGES',
+        'android.permission.READ_MEDIA_VIDEO',
+        'android.permission.READ_MEDIA_AUDIO',
+        'android.permission.READ_MEDIA_VISUAL_USER_SELECTED',
       ],
       softwareKeyboardLayoutMode: 'resize',
     },
@@ -78,9 +79,10 @@ export default {
         'expo-image-picker',
         {
           photosPermission:
-            'inride necesita acceso a tus fotos solo para subir documentos de verificación del conductor.',
+            'inride accede a tus fotos únicamente para que el conductor elija su foto de perfil y sus documentos de verificación. No usamos tus fotos con otros fines.',
           cameraPermission:
-            'inride necesita la cámara solo para fotografiar documentos de verificación.',
+            'inride usa la cámara para que el conductor se tome su foto de perfil (la ve el pasajero) y fotografíe sus documentos de verificación (INE, licencia, etc.).',
+          microphonePermission: false,
         },
       ],
       [
@@ -88,6 +90,8 @@ export default {
         {
           microphonePermission: false,
           recordAudioAndroid: false,
+          enableBackgroundPlayback: false,
+          enableBackgroundRecording: false,
         },
       ],
     ],

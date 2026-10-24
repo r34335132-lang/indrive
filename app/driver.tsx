@@ -17,6 +17,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppLogo } from '@/components/AppLogo';
 import { RideNotice } from '@/components/RideNotice';
 import { RideChatButton } from '@/components/RideChatSheet';
+import { DriverPhotoCard } from '@/components/DriverPhotoCard';
 import { SideMenu } from '@/components/SideMenu';
 import { LegalLinks } from '@/components/LegalLinks';
 import { TripCard } from '@/components/TripCard';
@@ -62,6 +63,7 @@ export default function DriverScreen() {
   const [online, setOnline] = useState(true);
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [showDelete, setShowDelete] = useState(false);
+  const [showPhoto, setShowPhoto] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const notifiedId = useRef<string | null>(null);
 
@@ -191,7 +193,7 @@ export default function DriverScreen() {
     return <Redirect href="/admin" />;
   }
   if (isReady && !user) {
-    return <Redirect href="/" />;
+    return <Redirect href="/welcome" />;
   }
 
   const acceptTrip = async () => {
@@ -233,7 +235,7 @@ export default function DriverScreen() {
           >
             <Feather name="menu" size={18} color={colors.foreground} />
           </Pressable>
-          <AppLogo light />
+          <AppLogo />
           <Pressable
             onPress={() => {
               if (!canWork) {
@@ -284,6 +286,7 @@ export default function DriverScreen() {
 
         {tab === 'home' ? (
           <>
+            {showPhoto || !user?.avatarUrl ? <DriverPhotoCard compact /> : null}
             {!canWork ? (
               <View style={[styles.blockCard, { backgroundColor: colors.card, borderColor: '#d88d2e' }]}>
                 <Text style={[styles.blockTitle, { color: colors.foreground }]}>
@@ -294,7 +297,7 @@ export default function DriverScreen() {
                   Llevas {formatMoney(lifetimeEarnings)} de {formatMoney(blockFee)}.
                 </Text>
                 <View style={styles.blockTrack}>
-                  <View style={[styles.blockFill, { width: Math.round(blockProgress * 100) + '%' }]} />
+                  <View style={[styles.blockFill, { width: `${Math.round(blockProgress * 100)}%` }]} />
                 </View>
                 <Pressable
                   onPress={() => void satisfyBlockFee()}
@@ -645,6 +648,15 @@ export default function DriverScreen() {
         rating={user?.rating}
         items={[
           {
+            key: 'photo',
+            label: 'Foto de perfil',
+            icon: 'camera',
+            onPress: () => {
+              setTab('home');
+              setShowPhoto(true);
+            },
+          },
+          {
             key: 'earnings',
             label: 'Ganancias',
             icon: 'dollar-sign',
@@ -691,7 +703,7 @@ export default function DriverScreen() {
           void deleteAccount()
             .then(() => {
               setShowDelete(false);
-              router.replace('/');
+              router.replace('/welcome');
             })
             .finally(() => setDeleting(false));
         }}

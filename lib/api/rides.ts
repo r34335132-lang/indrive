@@ -124,6 +124,7 @@ export async function acceptRide(rideId: string, driver: Profile): Promise<Ride>
       driver_rating: driver.rating,
       driver_car: car || driver.bio || 'Vehículo inride',
       driver_plate: driver.vehiclePlate ?? null,
+      ...(driver.avatarUrl ? { driver_photo_url: driver.avatarUrl } : {}),
       accepted_at: new Date().toISOString(),
     })
     .eq('id', rideId)

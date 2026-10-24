@@ -1,19 +1,27 @@
-import { Feather } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
 import * as Haptics from 'expo-haptics';
+import { Image } from 'expo-image';
 import * as Location from 'expo-location';
 import { useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from 'react-native';
+import { ActivityIndicator, ImageBackground, Pressable, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { NavigationBanner } from '@/components/NavigationBanner';
 import { RideChatButton } from '@/components/RideChatSheet';
 import { RideNotice } from '@/components/RideNotice';
 import { AppMap } from '@/components/maps/AppMap';
+import { BRAND, cardShadow } from '@/constants/theme';
 import { closeRealtimeChannel, fetchRideLocation, subscribeRideLocation } from '@/lib/api/rides';
 import { useAuth } from '@/context/AuthContext';
 import { useBooking } from '@/context/BookingContext';
 import { useColors } from '@/hooks/useColors';
-import { formatDistanceM, formatEtaMinutes, resolveGuidance } from '@/lib/navigation';
+import {
+  formatArrivalTime,
+  formatDistanceM,
+  formatEtaMinutes,
+  openExternalNavigation,
+  resolveGuidance,
+} from '@/lib/navigation';
 import {
   bearingBetween,
   distanceKmBetween,
@@ -27,6 +35,17 @@ type Phase = 'to_pickup' | 'arrived_pickup' | 'to_destination' | 'done';
 
 const MAX_WAIT_SEC = 5 * 60;
 const WAIT_PESOS_PER_MIN = 1;
+
+const summaryBackground = require('@/assets/images/login-bg.jpg');
+
+const PASSENGER_STEPS = ['Solicitado', 'En camino', 'Llegó', 'En viaje'];
+
+function initialsOf(name: string) {
+  const parts = name.trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'IR';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[1][0]}`.toUpperCase();
+}
 
 function asLatLng(lat: unknown, lng: unknown, fallback: LatLng = DRIVER_NEARBY): LatLng {
   const latitude = Number(lat);
@@ -84,6 +103,9 @@ export default function RideMapScreen() {
   const lastPublishAt = useRef(0);
   const lastHeading = useRef(0);
   const lastRouteFrom = useRef<LatLng | null>(null);
+  const lastRouteTo = useRef('');
+  const publishRef = useRef(publishDriverLocation);
+  publishRef.current = publishDriverLocation;
 
   const pickupPoint = useMemo(
     () =>
@@ -166,6 +188,25 @@ export default function RideMapScreen() {
           ? 'En viaje'
           : 'Finalizado';
 
+  const passengerStep =
+    phase === 'to_pickup' ? 1 : phase === 'arrived_pickup' ? 2 : 3;
+  const passengerEta = guidance
+    ? formatEtaMinutes(guidance.remainingSeconds)
+    : routeMeta.seconds > 0
+      ? formatEtaMinutes(routeMeta.seconds)
+      : '—';
+  const passengerDistance = guidance
+    ? formatDistanceM(guidance.remainingMeters)
+    : driverLive
+      ? `${distanceKmBetween(driverLive, targetPoint).toFixed(1)} km`
+      : '';
+  const passengerHint =
+    phase === 'to_pickup'
+      ? 'Tu conductor viene en camino'
+      : phase === 'arrived_pickup'
+        ? 'Tu conductor llegó al punto de partida'
+        : 'Rumbo a tu destino';
+
   useEffect(() => {
     let cancelled = false;
     let subscription: Location.LocationSubscription | null = null;
@@ -201,7 +242,7 @@ export default function RideMapScreen() {
           setLiveHeading(first.coords.heading);
         }
         if (isDriver && activeRide?.id) {
-          void publishDriverLocation(next.latitude, next.longitude, lastHeading.current);
+          void publishRef.current(next.latitude, next.longitude, lastHeading.current).catch(() => {});
         }
 
         subscription = await Location.watchPositionAsync(
@@ -227,7 +268,7 @@ export default function RideMapScreen() {
             const now = Date.now();
             if (now - lastPublishAt.current < 2000) return;
             lastPublishAt.current = now;
-            void publishDriverLocation(point.latitude, point.longitude, nextHeading).catch(() => {});
+            void publishRef.current(point.latitude, point.longitude, nextHeading).catch(() => {});
           },
         );
       } catch (error) {
@@ -243,7 +284,7 @@ export default function RideMapScreen() {
       cancelled = true;
       subscription?.remove();
     };
-  }, [activeRide?.id, isDriver, publishDriverLocation]);
+  }, [activeRide?.id, isDriver]);
 
   useEffect(() => {
     if (!activeRide) return;
@@ -281,9 +322,16 @@ export default function RideMapScreen() {
           ? driverLive
           : myLocation ?? pickupPoint;
     const to = targetPoint;
+    const toKey = `${to.latitude.toFixed(5)},${to.longitude.toFixed(5)}`;
+    const sameTarget = lastRouteTo.current === toKey;
     const prev = lastRouteFrom.current;
-    if (prev && distanceKmBetween(prev, from) < 0.12 && routeCoords.length > 1) {
+    if (sameTarget && prev && distanceKmBetween(prev, from) < 0.12 && routeCoords.length > 1) {
       return;
+    }
+    if (!sameTarget) {
+      setRouteCoords([]);
+      setRouteSteps([]);
+      setRouteMeta({ meters: 0, seconds: 0 });
     }
     let cancelled = false;
     setRouting(true);
@@ -291,6 +339,7 @@ export default function RideMapScreen() {
       .then((route) => {
         if (cancelled) return;
         lastRouteFrom.current = from;
+        lastRouteTo.current = toKey;
         setRouteCoords(route.coordinates);
         setRouteSteps(route.steps ?? []);
         setRouteMeta({
@@ -444,6 +493,11 @@ export default function RideMapScreen() {
         followUser={navigating && navLocked}
         navigationMode={navigating && navLocked}
         heading={heading}
+        maneuver={
+          navigating && guidance && guidance.step.type !== 'arrive' && guidance.step.streetName
+            ? { coordinate: guidance.step.location, label: guidance.step.streetName }
+            : null
+        }
         markers={[
           { id: 'pickup', coordinate: pickupPoint, color: '#138a68' },
           { id: 'dest', coordinate: destinationPoint, color: '#c2410c' },
@@ -451,17 +505,16 @@ export default function RideMapScreen() {
         ]}
       />
 
-      {navigating || isPassenger ? (
+      {navigating ? (
         <NavigationBanner
           guidance={guidance}
-          phaseLabel={phaseLabel}
           destinationLabel={targetLabel}
           topInset={insets.top}
           navLocked={navLocked}
-          onRecenter={navigating ? () => setNavLocked((v) => !v) : undefined}
+          onRecenter={() => setNavLocked((v) => !v)}
           leftAction={
             <Pressable onPress={() => router.back()} style={styles.toolBtn}>
-              <Feather name="arrow-left" size={18} color="#16362f" />
+              <Feather name="arrow-left" size={20} color="#202124" />
             </Pressable>
           }
           rightAction={
@@ -481,16 +534,16 @@ export default function RideMapScreen() {
       ) : (
         <SafeAreaView style={styles.header} edges={['top']} pointerEvents="box-none">
           <Pressable onPress={() => router.back()} style={styles.roundBtn}>
-            <Feather name="arrow-left" size={20} color={colors.foreground} />
+            <Feather name="arrow-left" size={20} color={BRAND.primary} />
           </Pressable>
-          <View style={[styles.statusChip, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.statusChip}>
             <View
               style={[
                 styles.statusDot,
-                { backgroundColor: waitExpired ? '#d88d2e' : colors.primary },
+                { backgroundColor: waitExpired ? '#d88d2e' : BRAND.green },
               ]}
             />
-            <Text style={[styles.statusText, { color: colors.foreground }]} numberOfLines={2}>
+            <Text style={styles.statusText} numberOfLines={2}>
               {phaseLabel}
             </Text>
           </View>
@@ -528,7 +581,103 @@ export default function RideMapScreen() {
             </View>
           ) : null}
 
-          {phase === 'arrived_pickup' ? (
+          {isPassenger ? (
+            <View style={styles.tripCard}>
+              <View style={styles.driverRow}>
+                <View style={styles.driverAvatar}>
+                  {activeRide.driverPhotoUrl ? (
+                    <Image
+                      source={{ uri: activeRide.driverPhotoUrl }}
+                      style={styles.driverAvatarImg}
+                      contentFit="cover"
+                    />
+                  ) : (
+                    <Text style={styles.driverAvatarText}>
+                      {initialsOf(activeRide.driverName || 'Conductor')}
+                    </Text>
+                  )}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.driverName} numberOfLines={1}>
+                    {activeRide.driverName || 'Conductor'}
+                  </Text>
+                  <Text style={styles.driverMeta} numberOfLines={1}>
+                    ★ {Number(activeRide.driverRating || 5).toFixed(1)} · {activeRide.driverCar}
+                  </Text>
+                </View>
+                <View style={styles.plate}>
+                  <Text style={styles.plateText}>{activeRide.driverPlate}</Text>
+                </View>
+              </View>
+
+              <View style={styles.stepper}>
+                {PASSENGER_STEPS.map((label, index) => {
+                  const done = index < passengerStep;
+                  const current = index === passengerStep;
+                  return (
+                    <View key={label} style={styles.step}>
+                      <View style={styles.stepTrack}>
+                        <View
+                          style={[
+                            styles.stepLine,
+                            index === 0 && styles.stepLineHidden,
+                            (done || current) && styles.stepLineOn,
+                          ]}
+                        />
+                        <View
+                          style={[
+                            styles.stepDot,
+                            done && styles.stepDotDone,
+                            current && styles.stepDotCurrent,
+                          ]}
+                        >
+                          {done ? <Feather name="check" size={11} color="#fff" /> : null}
+                          {current ? (
+                            <MaterialCommunityIcons name="car-side" size={13} color={BRAND.primary} />
+                          ) : null}
+                        </View>
+                        <View
+                          style={[
+                            styles.stepLine,
+                            index === PASSENGER_STEPS.length - 1 && styles.stepLineHidden,
+                            done && styles.stepLineOn,
+                          ]}
+                        />
+                      </View>
+                      <Text style={[styles.stepLabel, (done || current) && styles.stepLabelOn]}>
+                        {label}
+                      </Text>
+                    </View>
+                  );
+                })}
+              </View>
+
+              <View style={styles.etaBlock}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.etaBig}>
+                    {phase === 'arrived_pickup' ? 'Ya llegó' : passengerEta}
+                  </Text>
+                  <Text style={styles.etaHint} numberOfLines={1}>
+                    {passengerDistance ? `${passengerDistance} · ` : ''}
+                    {passengerHint}
+                  </Text>
+                </View>
+                <View style={styles.farePill}>
+                  <Text style={styles.farePillText}>${money(fare)}</Text>
+                </View>
+              </View>
+
+              {phase === 'arrived_pickup' ? (
+                <View style={styles.waitRow}>
+                  <Feather name="clock" size={14} color={waitExpired ? '#d88d2e' : BRAND.green} />
+                  <Text style={styles.waitText}>
+                    Espera {formatClock(Math.min(waitSec, MAX_WAIT_SEC))} / 5:00 · $
+                    {WAIT_PESOS_PER_MIN}/min · cargo ${waitCost}
+                  </Text>
+                </View>
+              ) : null}
+            </View>
+          ) : phase === 'arrived_pickup' ? (
             <View style={[styles.navCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Text style={[styles.navTitle, { color: colors.foreground }]}>
                 {formatClock(Math.min(waitSec, MAX_WAIT_SEC))} / 5:00
@@ -543,32 +692,52 @@ export default function RideMapScreen() {
               ) : null}
             </View>
           ) : navigating ? (
-            <View style={styles.driverSheet}>
-              <View style={styles.sheetHandle} />
-              <View style={styles.sheetStats}>
-                <View>
-                  <Text style={styles.sheetLabel}>Pasajero</Text>
-                  <Text style={styles.sheetValue} numberOfLines={1}>
-                    {activeRide.passengerName || 'Pasajero'}
+            <View style={styles.navBar}>
+              <View style={styles.navBarTop}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.navEta}>
+                    {guidance ? formatEtaMinutes(guidance.remainingSeconds) : routing ? 'Calculando…' : '—'}
+                  </Text>
+                  <Text style={styles.navEtaSub} numberOfLines={1}>
+                    {guidance
+                      ? `${formatDistanceM(guidance.remainingMeters)} · Llegada ${formatArrivalTime(guidance.remainingSeconds)}`
+                      : targetLabel}
                   </Text>
                 </View>
-                <View style={styles.sheetDivider} />
-                <View>
-                  <Text style={styles.sheetLabel}>Ganas</Text>
-                  <Text style={styles.sheetValue}>${money(earnings)}</Text>
-                </View>
-                <View style={styles.sheetDivider} />
-                <View>
-                  <Text style={styles.sheetLabel}>ETA</Text>
-                  <Text style={styles.sheetValue}>
-                    {guidance ? formatEtaMinutes(guidance.remainingSeconds) : routing ? '…' : '—'}
-                  </Text>
+                <View style={styles.navEarn}>
+                  <Text style={styles.navEarnLabel}>Ganas</Text>
+                  <Text style={styles.navEarnValue}>${money(earnings)}</Text>
                 </View>
               </View>
-              <Text style={styles.sheetRoute} numberOfLines={1}>
-                {phase === 'to_pickup' ? `Recoger en ${originLabel}` : `Llevar a ${destLabel}`}
-                {guidance ? ` · ${formatDistanceM(guidance.remainingMeters)}` : ''}
-              </Text>
+              <View style={styles.navTarget}>
+                <View
+                  style={[
+                    styles.navTargetDot,
+                    { backgroundColor: phase === 'to_pickup' ? '#138a68' : '#c2410c' },
+                  ]}
+                />
+                <Text style={styles.navTargetText} numberOfLines={1}>
+                  {phase === 'to_pickup'
+                    ? `Recoger a ${activeRide.passengerName || 'pasajero'} · ${originLabel}`
+                    : `Destino · ${destLabel}`}
+                </Text>
+              </View>
+              <View style={styles.extNavRow}>
+                <Pressable
+                  onPress={() => void openExternalNavigation('google', targetPoint).catch(() => {})}
+                  style={({ pressed }) => [styles.extNavBtn, pressed && { opacity: 0.8 }]}
+                >
+                  <MaterialCommunityIcons name="google-maps" size={18} color="#1a73e8" />
+                  <Text style={styles.extNavText}>Google Maps</Text>
+                </Pressable>
+                <Pressable
+                  onPress={() => void openExternalNavigation('waze', targetPoint).catch(() => {})}
+                  style={({ pressed }) => [styles.extNavBtn, pressed && { opacity: 0.8 }]}
+                >
+                  <MaterialCommunityIcons name="waze" size={18} color="#05c8f7" />
+                  <Text style={styles.extNavText}>Waze</Text>
+                </Pressable>
+              </View>
             </View>
           ) : !permissionDenied && myLocation ? (
             <View style={[styles.navCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -583,7 +752,7 @@ export default function RideMapScreen() {
             </View>
           ) : null}
 
-          {!myLocation && !permissionDenied && phase !== 'arrived_pickup' ? (
+          {!isPassenger && !myLocation && !permissionDenied && phase !== 'arrived_pickup' ? (
             <View style={[styles.navCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <ActivityIndicator color={colors.primary} />
               <Text style={{ color: colors.mutedForeground, fontFamily: 'Inter_500Medium' }}>
@@ -640,13 +809,121 @@ export default function RideMapScreen() {
           ) : null}
         </SafeAreaView>
       ) : (
-        <RideNotice
-          visible
-          title="Viaje completado"
-          message={`Duración ${Math.max(1, Math.round(tripDurationSec / 60))} min · $${money(fare)}${isDriver ? ` · ganas $${money(earnings)}` : ''}`}
-          primaryLabel="Listo"
-          onPrimary={() => void finish()}
-        />
+        <View style={[styles.summaryWrap, { paddingBottom: Math.max(insets.bottom, 12) }]}>
+          <View style={styles.summaryCard}>
+            <ImageBackground
+              source={summaryBackground}
+              style={styles.summaryHero}
+              imageStyle={styles.summaryHeroImage}
+              resizeMode="cover"
+            >
+              <View style={styles.summaryHeroShade} />
+              <View style={styles.summaryCheck}>
+                <Feather name="check" size={26} color={BRAND.green} />
+              </View>
+              <Text style={styles.summaryTitle}>¡Viaje completado!</Text>
+              <Text style={styles.summarySub}>Gracias por viajar con INRIDE</Text>
+            </ImageBackground>
+
+            <View style={styles.summaryBody}>
+              <View style={styles.summaryInfo}>
+                <View style={styles.summaryPerson}>
+                  <View style={styles.driverAvatar}>
+                    {isPassenger && activeRide.driverPhotoUrl ? (
+                      <Image
+                        source={{ uri: activeRide.driverPhotoUrl }}
+                        style={styles.driverAvatarImg}
+                        contentFit="cover"
+                      />
+                    ) : (
+                      <Text style={styles.driverAvatarText}>
+                        {initialsOf(
+                          isPassenger
+                            ? activeRide.driverName || 'Conductor'
+                            : activeRide.passengerName || 'Pasajero',
+                        )}
+                      </Text>
+                    )}
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.driverName} numberOfLines={1}>
+                      {isPassenger
+                        ? activeRide.driverName || 'Conductor'
+                        : activeRide.passengerName || 'Pasajero'}
+                    </Text>
+                    <Text style={styles.driverMeta} numberOfLines={1}>
+                      ★{' '}
+                      {Number(
+                        (isPassenger ? activeRide.driverRating : activeRide.passengerRating) || 5,
+                      ).toFixed(1)}
+                      {isPassenger ? ` · ${activeRide.driverPlate}` : ''}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.summaryDivider} />
+                <View style={styles.summaryRoute}>
+                  <View style={styles.summaryRouteRow}>
+                    <View style={[styles.routeDotSmall, { backgroundColor: BRAND.green }]} />
+                    <Text style={styles.summaryRouteText} numberOfLines={1}>
+                      {originLabel}
+                    </Text>
+                  </View>
+                  <View style={styles.summaryRouteRow}>
+                    <View style={[styles.routeDotSmall, { backgroundColor: BRAND.red }]} />
+                    <Text style={styles.summaryRouteText} numberOfLines={1}>
+                      {destLabel}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.summaryStats}>
+                <View style={styles.summaryStat}>
+                  <MaterialCommunityIcons name="car-side" size={18} color={BRAND.primary} />
+                  <View>
+                    <Text style={styles.summaryStatLabel}>Distancia</Text>
+                    <Text style={styles.summaryStatValue}>
+                      {Number(activeRide.distanceKm || 0).toFixed(1)} km
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.summaryStat}>
+                  <Feather name="clock" size={16} color={BRAND.primary} />
+                  <View>
+                    <Text style={styles.summaryStatLabel}>Tiempo</Text>
+                    <Text style={styles.summaryStatValue}>
+                      {tripDurationSec > 0
+                        ? `${Math.max(1, Math.round(tripDurationSec / 60))} min`
+                        : activeRide.duration}
+                    </Text>
+                  </View>
+                </View>
+                <View style={styles.summaryStat}>
+                  <Feather
+                    name={activeRide.paymentMethod === 'card' ? 'credit-card' : 'dollar-sign'}
+                    size={16}
+                    color={BRAND.primary}
+                  />
+                  <View>
+                    <Text style={styles.summaryStatLabel}>
+                      {isDriver ? 'Ganas' : activeRide.paymentMethod === 'card' ? 'Tarjeta' : 'Efectivo'}
+                    </Text>
+                    <Text style={styles.summaryStatValue}>
+                      ${money(isDriver ? earnings : fare)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              <Pressable
+                onPress={() => void finish()}
+                style={({ pressed }) => [styles.finishBtn, pressed && { opacity: 0.85 }]}
+              >
+                <Text style={styles.finishText}>Listo</Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
       )}
 
       <RideNotice
@@ -673,7 +950,7 @@ export default function RideMapScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: '#c5d5cc' },
-  map: { ...StyleSheet.absoluteFillObject },
+  map: { ...StyleSheet.absoluteFill },
   loadingScreen: { alignItems: 'center', flex: 1, gap: 12, justifyContent: 'center' },
   loadingText: { fontFamily: 'Inter_600SemiBold', fontSize: 15 },
   backLink: { marginTop: 8, padding: 12 },
@@ -685,37 +962,180 @@ const styles = StyleSheet.create({
     paddingTop: 8,
   },
   roundBtn: {
+    ...cardShadow,
     alignItems: 'center',
     backgroundColor: '#fff',
-    borderRadius: 12,
-    height: 42,
+    borderRadius: 22,
+    height: 44,
     justifyContent: 'center',
-    width: 42,
+    width: 44,
   },
   statusChip: {
+    ...cardShadow,
     alignItems: 'center',
-    borderRadius: 14,
-    borderWidth: 1,
+    backgroundColor: '#fff',
+    borderRadius: 22,
     flex: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+  },
+  statusDot: { borderRadius: 5, height: 10, width: 10 },
+  statusText: { color: BRAND.text, flex: 1, fontFamily: 'Inter_700Bold', fontSize: 13 },
+  tripCard: {
+    ...cardShadow,
+    backgroundColor: '#fff',
+    borderRadius: 24,
+    gap: 14,
+    padding: 16,
+  },
+  driverRow: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  driverAvatar: {
+    alignItems: 'center',
+    backgroundColor: BRAND.primary,
+    borderColor: BRAND.mint,
+    borderRadius: 26,
+    borderWidth: 3,
+    height: 52,
+    justifyContent: 'center',
+    overflow: 'hidden',
+    width: 52,
+  },
+  driverAvatarImg: { height: '100%', width: '100%' },
+  driverAvatarText: { color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 16 },
+  driverName: { color: BRAND.text, fontFamily: 'Inter_700Bold', fontSize: 17 },
+  driverMeta: { color: BRAND.muted, fontFamily: 'Inter_500Medium', fontSize: 12, marginTop: 2 },
+  plate: {
+    backgroundColor: BRAND.bg,
+    borderColor: BRAND.border,
+    borderRadius: 10,
+    borderWidth: 1,
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  plateText: { color: BRAND.text, fontFamily: 'Inter_700Bold', fontSize: 12, letterSpacing: 0.5 },
+  stepper: { flexDirection: 'row' },
+  step: { alignItems: 'center', flex: 1, gap: 6 },
+  stepTrack: { alignItems: 'center', flexDirection: 'row', width: '100%' },
+  stepLine: { backgroundColor: BRAND.border, flex: 1, height: 3 },
+  stepLineOn: { backgroundColor: BRAND.green },
+  stepLineHidden: { backgroundColor: 'transparent' },
+  stepDot: {
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderColor: BRAND.border,
+    borderRadius: 13,
+    borderWidth: 2,
+    height: 26,
+    justifyContent: 'center',
+    width: 26,
+  },
+  stepDotDone: { backgroundColor: BRAND.green, borderColor: BRAND.green },
+  stepDotCurrent: { backgroundColor: BRAND.mint, borderColor: BRAND.primary },
+  stepLabel: { color: BRAND.muted, fontFamily: 'Inter_500Medium', fontSize: 11 },
+  stepLabelOn: { color: BRAND.text, fontFamily: 'Inter_700Bold' },
+  etaBlock: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  etaBig: { color: BRAND.text, fontFamily: 'Inter_700Bold', fontSize: 24 },
+  etaHint: { color: BRAND.muted, fontFamily: 'Inter_500Medium', fontSize: 12, marginTop: 2 },
+  farePill: {
+    backgroundColor: BRAND.mint,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+  },
+  farePillText: { color: BRAND.primary, fontFamily: 'Inter_700Bold', fontSize: 16 },
+  waitRow: {
+    alignItems: 'center',
+    backgroundColor: BRAND.bg,
+    borderRadius: 12,
     flexDirection: 'row',
     gap: 8,
     paddingHorizontal: 12,
     paddingVertical: 10,
   },
-  statusDot: { borderRadius: 5, height: 8, width: 8 },
-  statusText: { flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  waitText: { color: BRAND.text, flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  summaryWrap: {
+    bottom: 0,
+    left: 0,
+    paddingHorizontal: 12,
+    position: 'absolute',
+    right: 0,
+  },
+  summaryCard: {
+    ...cardShadow,
+    backgroundColor: '#fff',
+    borderRadius: 26,
+    overflow: 'hidden',
+  },
+  summaryHero: {
+    alignItems: 'center',
+    gap: 4,
+    paddingBottom: 18,
+    paddingTop: 20,
+  },
+  summaryHeroImage: { opacity: 0.9 },
+  summaryHeroShade: {
+    ...StyleSheet.absoluteFill,
+    backgroundColor: 'rgba(8,30,25,0.45)',
+  },
+  summaryCheck: {
+    alignItems: 'center',
+    backgroundColor: '#fff',
+    borderRadius: 26,
+    height: 52,
+    justifyContent: 'center',
+    marginBottom: 6,
+    width: 52,
+  },
+  summaryTitle: { color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 22 },
+  summarySub: { color: '#d6ece4', fontFamily: 'Inter_500Medium', fontSize: 13 },
+  summaryBody: { gap: 14, padding: 16 },
+  summaryInfo: {
+    backgroundColor: BRAND.bg,
+    borderRadius: 18,
+    gap: 12,
+    padding: 14,
+  },
+  summaryPerson: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  summaryDivider: { backgroundColor: BRAND.border, height: 1 },
+  summaryRoute: { gap: 8 },
+  summaryRouteRow: { alignItems: 'center', flexDirection: 'row', gap: 10 },
+  routeDotSmall: { borderRadius: 5, height: 10, width: 10 },
+  summaryRouteText: { color: BRAND.text, flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  summaryStats: { flexDirection: 'row', gap: 8 },
+  summaryStat: {
+    alignItems: 'center',
+    backgroundColor: BRAND.bg,
+    borderRadius: 14,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 10,
+  },
+  summaryStatLabel: { color: BRAND.muted, fontFamily: 'Inter_500Medium', fontSize: 10 },
+  summaryStatValue: { color: BRAND.text, fontFamily: 'Inter_700Bold', fontSize: 13, marginTop: 1 },
+  finishBtn: {
+    alignItems: 'center',
+    backgroundColor: BRAND.primary,
+    borderRadius: 28,
+    height: 54,
+    justifyContent: 'center',
+  },
+  finishText: { color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 16 },
   toolBtn: {
     alignItems: 'center',
     backgroundColor: '#fff',
-    borderRadius: 12,
-    elevation: 3,
-    height: 42,
+    borderRadius: 24,
+    elevation: 4,
+    height: 48,
     justifyContent: 'center',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.12,
-    shadowRadius: 4,
-    width: 42,
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    width: 48,
   },
   bottomPanel: {
     bottom: 0,
@@ -732,33 +1152,55 @@ const styles = StyleSheet.create({
     padding: 14,
   },
   navTitle: { fontFamily: 'Inter_700Bold', fontSize: 16 },
-  driverSheet: {
+  navBar: {
     backgroundColor: '#fff',
-    borderRadius: 22,
-    elevation: 6,
-    gap: 10,
-    padding: 16,
+    borderRadius: 24,
+    elevation: 8,
+    gap: 12,
+    paddingHorizontal: 18,
+    paddingVertical: 16,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
+    shadowOffset: { width: 0, height: -2 },
+    shadowOpacity: 0.14,
+    shadowRadius: 12,
   },
-  sheetHandle: {
-    alignSelf: 'center',
-    backgroundColor: '#d5e0d9',
-    borderRadius: 3,
-    height: 4,
-    marginBottom: 2,
-    width: 40,
+  navBarTop: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  navEta: { color: '#188038', fontFamily: 'Inter_700Bold', fontSize: 26, letterSpacing: -0.5 },
+  navEtaSub: { color: '#5f6368', fontFamily: 'Inter_500Medium', fontSize: 14, marginTop: 1 },
+  navEarn: {
+    alignItems: 'center',
+    backgroundColor: BRAND.mint,
+    borderRadius: 14,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
   },
-  sheetStats: { alignItems: 'center', flexDirection: 'row' },
-  sheetDivider: { backgroundColor: '#e8efe9', height: 36, marginHorizontal: 10, width: 1 },
-  sheetLabel: { color: '#6d7c75', fontFamily: 'Inter_600SemiBold', fontSize: 11 },
-  sheetValue: { color: '#111b17', fontFamily: 'Inter_700Bold', fontSize: 16, marginTop: 2 },
-  sheetRoute: { color: '#6d7c75', fontFamily: 'Inter_500Medium', fontSize: 13 },
+  navEarnLabel: { color: BRAND.muted, fontFamily: 'Inter_600SemiBold', fontSize: 10 },
+  navEarnValue: { color: BRAND.primary, fontFamily: 'Inter_700Bold', fontSize: 16 },
+  navTarget: {
+    alignItems: 'center',
+    borderTopColor: '#eceff1',
+    borderTopWidth: 1,
+    flexDirection: 'row',
+    gap: 8,
+    paddingTop: 12,
+  },
+  navTargetDot: { borderRadius: 5, height: 10, width: 10 },
+  navTargetText: { color: '#202124', flex: 1, fontFamily: 'Inter_600SemiBold', fontSize: 14 },
+  extNavRow: { flexDirection: 'row', gap: 10 },
+  extNavBtn: {
+    alignItems: 'center',
+    backgroundColor: '#f1f3f4',
+    borderRadius: 20,
+    flex: 1,
+    flexDirection: 'row',
+    gap: 6,
+    height: 40,
+    justifyContent: 'center',
+  },
+  extNavText: { color: '#202124', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   primaryBtn: {
     alignItems: 'center',
-    borderRadius: 16,
+    borderRadius: 28,
     justifyContent: 'center',
     paddingVertical: 16,
   },

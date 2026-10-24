@@ -1,3 +1,4 @@
+import { ageOn, MIN_AGE } from '@/lib/age';
 import { mapDocs, mapProfile } from '@/lib/api/mappers';
 import { supabase } from '@/lib/supabase';
 import type { DriverDocs, Profile, UserRole } from '@/types';
@@ -98,7 +99,17 @@ export type RegisterPassengerInput = {
   phone: string;
   password: string;
   city?: string;
+  /** Fecha de nacimiento ISO (AAAA-MM-DD). Solo mayores de 18. */
+  birthdate: string;
 };
+
+function assertAdult(birthdateIso: string) {
+  const [y, m, d] = birthdateIso.split('-').map(Number);
+  const birth = new Date(y, (m || 1) - 1, d || 1);
+  if (!y || Number.isNaN(birth.getTime()) || ageOn(birth) < MIN_AGE) {
+    throw new Error(`Debes ser mayor de ${MIN_AGE} años para usar inride.`);
+  }
+}
 
 export type RegisterDriverInput = RegisterPassengerInput & {
   vehicleMake: string;
@@ -119,6 +130,7 @@ export async function registerPassenger(input: RegisterPassengerInput) {
   const name = input.name.trim();
   const email = input.email.trim().toLowerCase();
   const firstName = name.split(/\s+/)[0] || name;
+  assertAdult(input.birthdate);
   const meta = {
     name,
     first_name: firstName,
@@ -127,6 +139,7 @@ export async function registerPassenger(input: RegisterPassengerInput) {
     initials: initialsFromName(name),
     roles: ['passenger'],
     active_role: 'passenger',
+    birthdate: input.birthdate,
   };
 
   const { data, error } = await supabase.auth.signUp({
@@ -170,7 +183,9 @@ export async function registerDriver(input: RegisterDriverInput) {
   const firstName = name.split(/\s+/)[0] || name;
   const tier = input.driverTier ?? 'go';
   const bio = `${input.vehicleMake} ${input.vehicleModel} · ${input.vehiclePlate}`;
+  assertAdult(input.birthdate);
   const meta = {
+    birthdate: input.birthdate,
     name,
     first_name: firstName,
     phone: input.phone.trim(),

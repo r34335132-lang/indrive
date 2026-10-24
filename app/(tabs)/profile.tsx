@@ -1,21 +1,32 @@
 import { Feather } from '@expo/vector-icons';
 import Constants from 'expo-constants';
 import * as Haptics from 'expo-haptics';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useRouter } from 'expo-router';
 import { useState } from 'react';
-import { Linking, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
-import { AppLogo } from '@/components/AppLogo';
+import {
+  ImageBackground,
+  Linking,
+  Pressable,
+  ScrollView,
+  StyleSheet,
+  Text,
+  View,
+} from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { InrideWordmark } from '@/components/InrideMark';
 import { LegalLinks } from '@/components/LegalLinks';
 import { RideNotice } from '@/components/RideNotice';
 import { PRIVACY_URL, SUPPORT_EMAIL, TERMS_URL } from '@/constants/legal';
+import { BRAND, cardShadow } from '@/constants/theme';
 import { useAuth } from '@/context/AuthContext';
 import { useBooking } from '@/context/BookingContext';
-import { useColors } from '@/hooks/useColors';
 import type { UserRole } from '@/types';
 
 const APP_VERSION =
   Constants.expoConfig?.version ?? Constants.nativeAppVersion ?? '1.0.8';
+
+const headerBackground = require('@/assets/images/login-bg.jpg');
 
 const ROLE_LABEL: Record<UserRole, string> = {
   passenger: 'Pasajero',
@@ -23,9 +34,17 @@ const ROLE_LABEL: Record<UserRole, string> = {
   admin: 'Admin',
 };
 
+type MenuOption = {
+  icon: keyof typeof Feather.glyphMap;
+  title: string;
+  subtitle?: string;
+  onPress: () => void;
+  testID?: string;
+};
+
 export default function ProfileScreen() {
-  const colors = useColors();
   const router = useRouter();
+  const insets = useSafeAreaInsets();
   const { user, role, logout, deleteAccount, switchRole, docsComplete } = useAuth();
   const { trips } = useBooking();
   const [showDelete, setShowDelete] = useState(false);
@@ -37,6 +56,7 @@ export default function ProfileScreen() {
   const avgRating = rated.length
     ? rated.reduce((sum, t) => sum + (t.rating ?? 0), 0) / rated.length
     : user?.rating ?? 4.9;
+  const totalTrips = user?.totalTrips ?? trips.length;
 
   const changeRole = async (next: UserRole) => {
     if (next === role) return;
@@ -57,7 +77,7 @@ export default function ProfileScreen() {
     try {
       await deleteAccount();
       setShowDelete(false);
-      router.replace('/');
+      router.replace('/welcome');
     } catch (e) {
       setDeleteError(e instanceof Error ? e.message : 'No se pudo eliminar la cuenta');
     } finally {
@@ -65,12 +85,13 @@ export default function ProfileScreen() {
     }
   };
 
-  const accountOptions: Array<{
-    icon: keyof typeof Feather.glyphMap;
-    title: string;
-    subtitle: string;
-    onPress: () => void;
-  }> = [
+  const menuOptions: MenuOption[] = [
+    {
+      icon: 'clock',
+      title: 'Mis viajes',
+      subtitle: `${totalTrips} viajes realizados`,
+      onPress: () => router.push('/(tabs)/trips'),
+    },
     {
       icon: 'help-circle',
       title: 'Centro de ayuda',
@@ -80,187 +101,159 @@ export default function ProfileScreen() {
     {
       icon: 'file-text',
       title: 'Términos y condiciones',
-      subtitle: 'Contrato de uso de INRIDE',
       onPress: () => void Linking.openURL(TERMS_URL),
     },
     {
       icon: 'shield',
       title: 'Política de privacidad',
-      subtitle: 'Cómo usamos tus datos',
       onPress: () => void Linking.openURL(PRIVACY_URL),
+    },
+    {
+      icon: 'users',
+      title: 'Cambiar de cuenta',
+      subtitle: 'Cerrar sesión y elegir otra cuenta',
+      onPress: () => void logout(),
+      testID: 'switch-driver',
     },
   ];
 
   return (
-    <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
+    <View style={styles.safe}>
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        <View style={styles.header}>
-          <AppLogo />
-        </View>
+        <ImageBackground
+          source={headerBackground}
+          style={[styles.hero, { paddingTop: insets.top + 12 }]}
+          imageStyle={styles.heroImage}
+          resizeMode="cover"
+        >
+          <LinearGradient
+            colors={['rgba(6,28,23,0.25)', 'rgba(6,28,23,0.55)', 'rgba(6,28,23,0.85)']}
+            style={[StyleSheet.absoluteFill, styles.heroImage]}
+          />
+          <View style={styles.heroBrand}>
+            <InrideWordmark size={26} arcColor="#3fd0d6" pinColor="#ffffff" textColor="#ffffff" />
+          </View>
 
-        <View style={[styles.profileCard, { backgroundColor: colors.primary }]}>
-          <View style={styles.profileTop}>
+          <View style={styles.heroProfile}>
             <View style={styles.avatar}>
-              <Text style={[styles.avatarText, { color: colors.primary }]}>
-                {user?.initials ?? 'IR'}
-              </Text>
+              <Text style={styles.avatarText}>{user?.initials ?? 'IR'}</Text>
             </View>
-            <View style={styles.profileCopy}>
-              <Text style={styles.profileName}>{user?.name ?? 'Usuario'}</Text>
-              <Text style={styles.profileEmail}>{user?.email ?? ''}</Text>
-            </View>
-          </View>
-          <View style={styles.profileStats}>
-            <View>
-              <Text style={styles.profileStatValue}>{user?.totalTrips ?? trips.length}</Text>
-              <Text style={styles.profileStatLabel}>viajes</Text>
-            </View>
-            <View style={styles.profileStatLine} />
-            <View>
-              <Text style={styles.profileStatValue}>{avgRating.toFixed(1)}</Text>
-              <Text style={styles.profileStatLabel}>calificación</Text>
-            </View>
-            <View style={styles.profileStatLine} />
-            <View>
-              <Text style={styles.profileStatValue}>{user?.memberSince ?? '—'}</Text>
-              <Text style={styles.profileStatLabel}>desde</Text>
-            </View>
-          </View>
-        </View>
-
-        {(user?.roles?.length ?? 0) > 1 ? (
-          <View style={[styles.roleCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-            <Text style={[styles.roleTitle, { color: colors.foreground }]}>Cambiar rol</Text>
-            <Text style={[styles.roleHint, { color: colors.mutedForeground }]}>
-              Activo: {ROLE_LABEL[role ?? 'passenger']}
+            <Text style={styles.name} numberOfLines={1}>
+              {user?.name ?? 'Usuario'}
             </Text>
-            <View style={styles.roleRow}>
-              {(user?.roles ?? []).filter((r) => r !== 'admin').map((r) => (
-                <Pressable
-                  key={r}
-                  onPress={() => changeRole(r)}
-                  style={[
-                    styles.roleChip,
-                    {
-                      backgroundColor: r === role ? colors.primary : colors.secondary,
-                      borderColor: r === role ? colors.primary : colors.border,
-                    },
-                  ]}
-                >
-                  <Text
-                    style={{
-                      color: r === role ? '#fff' : colors.foreground,
-                      fontFamily: 'Inter_600SemiBold',
-                      fontSize: 12,
-                    }}
-                  >
-                    {ROLE_LABEL[r]}
-                  </Text>
-                </Pressable>
-              ))}
+            {user?.phone ? <Text style={styles.phone}>{user.phone}</Text> : null}
+            {user?.email ? (
+              <Text style={styles.email} numberOfLines={1}>
+                {user.email}
+              </Text>
+            ) : null}
+            <View style={styles.statChip}>
+              <Feather name="star" size={13} color="#f2b544" />
+              <Text style={styles.statChipText}>{avgRating.toFixed(1)}</Text>
+              <View style={styles.statChipLine} />
+              <Text style={styles.statChipText}>{totalTrips} viajes</Text>
+              <View style={styles.statChipLine} />
+              <Text style={styles.statChipText}>{user?.city || 'La Laguna'}</Text>
             </View>
           </View>
-        ) : null}
+        </ImageBackground>
 
-        <View style={[styles.ratingCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          <View style={styles.ratingHeader}>
-            <Text style={[styles.ratingTitle, { color: colors.foreground }]}>Tu reputación</Text>
-            <View style={styles.starsRow}>
-              {[1, 2, 3, 4, 5].map((star) => (
-                <Feather
-                  key={star}
-                  name="star"
-                  size={16}
-                  color={star <= Math.round(avgRating) ? '#e9a33f' : '#d5e0d9'}
-                />
-              ))}
+        <View style={styles.body}>
+          {(user?.roles?.length ?? 0) > 1 ? (
+            <View style={styles.card}>
+              <View style={styles.cardHeader}>
+                <Text style={styles.cardTitle}>Cambiar rol</Text>
+                <Text style={styles.cardHint}>Activo: {ROLE_LABEL[role ?? 'passenger']}</Text>
+              </View>
+              <View style={styles.roleRow}>
+                {(user?.roles ?? []).filter((r) => r !== 'admin').map((r) => {
+                  const active = r === role;
+                  return (
+                    <Pressable
+                      key={r}
+                      onPress={() => changeRole(r)}
+                      style={[styles.roleChip, active && styles.roleChipActive]}
+                    >
+                      <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
+                        {ROLE_LABEL[r]}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
+            </View>
+          ) : null}
+
+          <View style={[styles.card, styles.menuCard]}>
+            {menuOptions.map((option, index) => (
+              <Pressable
+                key={option.title}
+                testID={option.testID}
+                onPress={option.onPress}
+                style={({ pressed }) => [
+                  styles.option,
+                  index < menuOptions.length - 1 && styles.optionDivider,
+                  pressed && styles.pressed,
+                ]}
+              >
+                <View style={styles.optionIcon}>
+                  <Feather name={option.icon} size={18} color={BRAND.primary} />
+                </View>
+                <View style={styles.optionCopy}>
+                  <Text style={styles.optionTitle}>{option.title}</Text>
+                  {option.subtitle ? (
+                    <Text style={styles.optionSubtitle} numberOfLines={1}>
+                      {option.subtitle}
+                    </Text>
+                  ) : null}
+                </View>
+                <Feather name="chevron-right" size={18} color={BRAND.muted} />
+              </Pressable>
+            ))}
+          </View>
+
+          <View style={styles.card}>
+            <View style={styles.cardHeader}>
+              <Text style={styles.cardTitle}>Formas de pago</Text>
+              <Text style={styles.cardHint}>Se elige al pedir tu viaje</Text>
+            </View>
+            <View style={styles.payRow}>
+              <View style={styles.payIcon}>
+                <Feather name="dollar-sign" size={17} color={BRAND.green} />
+              </View>
+              <Text style={styles.payText}>Efectivo</Text>
+            </View>
+            <View style={styles.payRow}>
+              <View style={styles.payIcon}>
+                <Feather name="credit-card" size={17} color={BRAND.green} />
+              </View>
+              <Text style={styles.payText}>Tarjeta · Mercado Pago</Text>
             </View>
           </View>
-          <Text style={[styles.ratingCopy, { color: colors.mutedForeground }]}>
-            {avgRating.toFixed(2)} de promedio en {rated.length || completed.length} viajes
-            calificados.
-          </Text>
+
+          <Pressable
+            testID="logout-passenger"
+            onPress={() => void logout()}
+            style={({ pressed }) => [styles.logout, pressed && styles.pressed]}
+          >
+            <Feather name="log-out" size={17} color={BRAND.red} />
+            <Text style={styles.logoutText}>Cerrar sesión</Text>
+          </Pressable>
+
+          <Pressable
+            onPress={() => {
+              setDeleteError(null);
+              setShowDelete(true);
+            }}
+            style={styles.deleteBtn}
+          >
+            <Feather name="trash-2" size={15} color="#b91c1c" />
+            <Text style={styles.deleteText}>Eliminar cuenta</Text>
+          </Pressable>
+
+          <LegalLinks tone="muted" center />
+          <Text style={styles.version}>inride · versión {APP_VERSION}</Text>
         </View>
-
-        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Tu cuenta</Text>
-        <View style={[styles.optionList, { backgroundColor: colors.card, borderColor: colors.border }]}>
-          {accountOptions.map((option) => (
-            <Pressable
-              key={option.title}
-              onPress={option.onPress}
-              style={({ pressed }) => [styles.option, pressed && styles.pressed]}
-            >
-              <View style={[styles.optionIcon, { backgroundColor: colors.secondary }]}>
-                <Feather name={option.icon} size={18} color={colors.primary} />
-              </View>
-              <View style={styles.optionCopy}>
-                <Text style={[styles.optionTitle, { color: colors.foreground }]}>{option.title}</Text>
-                <Text style={[styles.optionSubtitle, { color: colors.mutedForeground }]}>
-                  {option.subtitle}
-                </Text>
-              </View>
-              <Feather name="chevron-right" size={17} color={colors.mutedForeground} />
-            </Pressable>
-          ))}
-        </View>
-
-        <Pressable
-          testID="switch-driver"
-          onPress={() => void logout()}
-          style={({ pressed }) => [
-            styles.driverMode,
-            { backgroundColor: '#16362f' },
-            pressed && styles.pressed,
-          ]}
-        >
-          <View style={styles.driverModeIcon}>
-            <Feather name="users" size={19} color="#16362f" />
-          </View>
-          <View style={styles.driverModeCopy}>
-            <Text style={styles.driverModeTitle}>Cambiar de cuenta</Text>
-            <Text style={styles.driverModeSubtitle}>Cerrar sesión y elegir otra cuenta</Text>
-          </View>
-          <Feather name="arrow-up-right" size={18} color="#c5edda" />
-        </Pressable>
-
-        <Text style={[styles.sectionTitle, { color: colors.foreground }]}>Información</Text>
-        <View style={[styles.infoRow, { borderBottomColor: colors.border }]}>
-          <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>Teléfono</Text>
-          <Text style={[styles.infoValue, { color: colors.foreground }]}>
-            {user?.phone || '—'}
-          </Text>
-        </View>
-        <View style={[styles.infoRow, { borderBottomColor: colors.border }]}>
-          <Text style={[styles.infoLabel, { color: colors.mutedForeground }]}>Ciudad</Text>
-          <Text style={[styles.infoValue, { color: colors.foreground }]}>
-            {user?.city || 'La Laguna'}
-          </Text>
-        </View>
-
-        <Pressable
-          testID="logout-passenger"
-          style={styles.logout}
-          onPress={() => void logout()}
-        >
-          <Feather name="log-out" size={16} color={colors.destructive} />
-          <Text style={[styles.logoutText, { color: colors.destructive }]}>Cerrar sesión</Text>
-        </Pressable>
-
-        <Pressable
-          onPress={() => {
-            setDeleteError(null);
-            setShowDelete(true);
-          }}
-          style={styles.deleteBtn}
-        >
-          <Feather name="trash-2" size={15} color="#b91c1c" />
-          <Text style={styles.deleteText}>Eliminar cuenta</Text>
-        </Pressable>
-
-        <LegalLinks tone="muted" center />
-        <Text style={[styles.version, { color: colors.mutedForeground }]}>
-          inride · versión {APP_VERSION}
-        </Text>
       </ScrollView>
 
       <RideNotice
@@ -283,122 +276,122 @@ export default function ProfileScreen() {
           if (!deleting) setShowDelete(false);
         }}
       />
-    </SafeAreaView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  safe: { flex: 1 },
-  content: { gap: 18, paddingBottom: 34, paddingHorizontal: 20 },
-  header: {
-    alignItems: 'center',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingTop: 4,
+  safe: { backgroundColor: BRAND.bg, flex: 1 },
+  content: { paddingBottom: 34 },
+  hero: {
+    borderBottomLeftRadius: 32,
+    borderBottomRightRadius: 32,
+    overflow: 'hidden',
+    paddingBottom: 26,
+    paddingHorizontal: 20,
   },
-  profileCard: { borderRadius: 23, gap: 22, padding: 18 },
-  profileTop: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  heroImage: { borderBottomLeftRadius: 32, borderBottomRightRadius: 32 },
+  heroBrand: { alignItems: 'center', marginBottom: 18 },
+  heroProfile: { alignItems: 'center', gap: 4 },
   avatar: {
     alignItems: 'center',
-    backgroundColor: '#d8f1e4',
-    borderRadius: 25,
-    height: 52,
+    backgroundColor: BRAND.mint,
+    borderColor: '#ffffff',
+    borderRadius: 46,
+    borderWidth: 4,
+    height: 92,
     justifyContent: 'center',
-    width: 52,
+    marginBottom: 8,
+    width: 92,
   },
-  avatarText: { fontFamily: 'Inter_700Bold', fontSize: 16 },
-  profileCopy: { flex: 1, gap: 4 },
-  profileName: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 16 },
-  profileEmail: { color: '#c5edda', fontFamily: 'Inter_400Regular', fontSize: 11 },
-  profileStats: {
+  avatarText: { color: BRAND.primary, fontFamily: 'Inter_700Bold', fontSize: 28 },
+  name: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 22 },
+  phone: { color: '#e3f3ec', fontFamily: 'Inter_600SemiBold', fontSize: 14 },
+  email: { color: '#c5e4d8', fontFamily: 'Inter_400Regular', fontSize: 12 },
+  statChip: {
     alignItems: 'center',
+    backgroundColor: 'rgba(255,255,255,0.16)',
+    borderColor: 'rgba(255,255,255,0.28)',
+    borderRadius: 20,
+    borderWidth: 1,
     flexDirection: 'row',
-    justifyContent: 'space-around',
+    gap: 8,
+    marginTop: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 8,
   },
-  profileStatValue: {
-    color: '#ffffff',
-    fontFamily: 'Inter_700Bold',
-    fontSize: 18,
-    textAlign: 'center',
+  statChipText: { color: '#ffffff', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  statChipLine: { backgroundColor: 'rgba(255,255,255,0.35)', height: 14, width: 1 },
+  body: { gap: 16, paddingHorizontal: 18, paddingTop: 18 },
+  card: {
+    ...cardShadow,
+    backgroundColor: BRAND.card,
+    borderRadius: 22,
+    gap: 12,
+    padding: 16,
   },
-  profileStatLabel: {
-    color: '#c5edda',
-    fontFamily: 'Inter_500Medium',
-    fontSize: 10,
-    marginTop: 3,
-    textAlign: 'center',
-  },
-  profileStatLine: { backgroundColor: 'rgba(255,255,255,0.18)', height: 27, width: 1 },
-  roleCard: { borderRadius: 18, borderWidth: 1, gap: 10, padding: 16 },
-  roleTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 },
-  roleHint: { fontFamily: 'Inter_400Regular', fontSize: 12 },
-  roleRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
-  roleChip: { borderRadius: 12, borderWidth: 1, paddingHorizontal: 14, paddingVertical: 10 },
-  ratingCard: { borderRadius: 18, borderWidth: 1, gap: 8, padding: 16 },
-  ratingHeader: {
+  cardHeader: {
     alignItems: 'center',
     flexDirection: 'row',
     justifyContent: 'space-between',
   },
-  ratingTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 },
-  starsRow: { flexDirection: 'row', gap: 3 },
-  ratingCopy: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 },
-  sectionTitle: { fontFamily: 'Inter_700Bold', fontSize: 17, marginTop: 2 },
-  optionList: { borderRadius: 19, borderWidth: 1, overflow: 'hidden' },
-  option: { alignItems: 'center', flexDirection: 'row', gap: 12, padding: 13 },
+  cardTitle: { color: BRAND.text, fontFamily: 'Inter_700Bold', fontSize: 15 },
+  cardHint: { color: BRAND.muted, fontFamily: 'Inter_500Medium', fontSize: 12 },
+  roleRow: { flexDirection: 'row', flexWrap: 'wrap', gap: 8 },
+  roleChip: {
+    backgroundColor: BRAND.bg,
+    borderColor: BRAND.border,
+    borderRadius: 20,
+    borderWidth: 1,
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  roleChipActive: { backgroundColor: BRAND.primary, borderColor: BRAND.primary },
+  roleChipText: { color: BRAND.text, fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  roleChipTextActive: { color: '#ffffff' },
+  menuCard: { gap: 0, paddingVertical: 4 },
+  option: { alignItems: 'center', flexDirection: 'row', gap: 12, paddingVertical: 13 },
+  optionDivider: { borderBottomColor: BRAND.border, borderBottomWidth: 1 },
   pressed: { opacity: 0.7 },
   optionIcon: {
     alignItems: 'center',
-    borderRadius: 12,
-    height: 38,
+    backgroundColor: BRAND.mint,
+    borderRadius: 14,
+    height: 40,
     justifyContent: 'center',
-    width: 38,
+    width: 40,
   },
-  optionCopy: { flex: 1, gap: 3 },
-  optionTitle: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
-  optionSubtitle: { fontFamily: 'Inter_400Regular', fontSize: 11 },
-  driverMode: {
+  optionCopy: { flex: 1, gap: 2 },
+  optionTitle: { color: BRAND.text, fontFamily: 'Inter_600SemiBold', fontSize: 14 },
+  optionSubtitle: { color: BRAND.muted, fontFamily: 'Inter_400Regular', fontSize: 11 },
+  payRow: { alignItems: 'center', flexDirection: 'row', gap: 12 },
+  payIcon: {
     alignItems: 'center',
-    borderRadius: 19,
-    flexDirection: 'row',
-    gap: 12,
-    padding: 14,
-  },
-  driverModeIcon: {
-    alignItems: 'center',
-    backgroundColor: '#d8f1e4',
+    backgroundColor: BRAND.mint,
     borderRadius: 12,
-    height: 38,
+    height: 36,
     justifyContent: 'center',
-    width: 38,
+    width: 36,
   },
-  driverModeCopy: { flex: 1, gap: 4 },
-  driverModeTitle: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 13 },
-  driverModeSubtitle: { color: '#c5edda', fontFamily: 'Inter_400Regular', fontSize: 11 },
-  infoRow: {
-    borderBottomWidth: 1,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingBottom: 13,
-    paddingTop: 1,
-  },
-  infoLabel: { fontFamily: 'Inter_400Regular', fontSize: 12 },
-  infoValue: { fontFamily: 'Inter_600SemiBold', fontSize: 12 },
+  payText: { color: BRAND.text, fontFamily: 'Inter_600SemiBold', fontSize: 13 },
   logout: {
+    ...cardShadow,
     alignItems: 'center',
+    backgroundColor: BRAND.card,
+    borderRadius: 28,
     flexDirection: 'row',
     gap: 8,
+    height: 52,
     justifyContent: 'center',
-    paddingVertical: 9,
   },
-  logoutText: { fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  logoutText: { color: BRAND.red, fontFamily: 'Inter_700Bold', fontSize: 14 },
   deleteBtn: {
     alignItems: 'center',
     flexDirection: 'row',
     gap: 8,
     justifyContent: 'center',
-    paddingVertical: 6,
+    paddingVertical: 4,
   },
   deleteText: { color: '#b91c1c', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
-  version: { fontFamily: 'Inter_400Regular', fontSize: 10, textAlign: 'center' },
+  version: { color: BRAND.muted, fontFamily: 'Inter_400Regular', fontSize: 10, textAlign: 'center' },
 });

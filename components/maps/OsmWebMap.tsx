@@ -23,7 +23,11 @@ type Props = {
   /** Modo navegación: zoom cercano, auto centrado y rumbo del auto. */
   navigationMode?: boolean;
   heading?: number;
+  /** Próxima maniobra: punto y nombre de la calle (etiqueta estilo Google Maps). */
+  maneuver?: { coordinate: MapCoordinate; label: string } | null;
   onPressMap?: (point: MapCoordinate) => void;
+  /** Se llama con el centro del mapa cada vez que el usuario termina de moverlo. */
+  onCenterChange?: (point: MapCoordinate) => void;
 };
 
 const DURANGO: MapCoordinate = { latitude: 25.555, longitude: -103.45 };
@@ -44,10 +48,21 @@ function buildHtml(initial: MapCoordinate, zoom: number) {
     .dot { width:16px; height:16px; border-radius:999px; background:#2b7cff; border:3px solid #fff; box-shadow:0 0 0 6px rgba(43,124,255,.22); }
     .pin { width:18px; height:18px; border-radius:999px; border:3px solid #fff; box-shadow:0 2px 8px rgba(0,0,0,.25); }
     .car {
-      width:34px; height:34px; border-radius:999px; background:#111b17; color:#fff;
-      display:flex; align-items:center; justify-content:center; border:3px solid #fff;
-      font-size:16px; box-shadow:0 4px 14px rgba(0,0,0,.35);
-      transform-origin:50% 50%;
+      width:46px; height:46px; border-radius:999px; background:#fff;
+      display:flex; align-items:center; justify-content:center;
+      box-shadow:0 3px 12px rgba(0,0,0,.35);
+      transform-origin:50% 50%; transition:transform .35s linear;
+    }
+    .mwrap { position:relative; width:0; height:0; }
+    .mdot {
+      position:absolute; left:-7px; top:-7px; width:14px; height:14px; border-radius:999px;
+      background:#fff; border:3px solid #1a73e8; box-sizing:border-box;
+    }
+    .mlabel {
+      position:absolute; left:0; bottom:12px; transform:translateX(-50%);
+      white-space:nowrap; max-width:220px; overflow:hidden; text-overflow:ellipsis;
+      background:#fff; color:#202124; font:600 13px -apple-system, Roboto, sans-serif;
+      padding:6px 10px; border-radius:8px; box-shadow:0 2px 8px rgba(0,0,0,.25);
     }
   </style>
 </head>
@@ -70,6 +85,10 @@ function buildHtml(initial: MapCoordinate, zoom: number) {
       var userMarker = null;
       var destMarker = null;
       var routeLine = null;
+      var routeCasing = null;
+      var maneuverMarker = null;
+      var maneuverKey = '';
+      var carNav = false;
       var extra = {};
       var fittedKey = '';
       var lastNav = { lat: 0, lng: 0, heading: 0 };
@@ -90,21 +109,35 @@ function buildHtml(initial: MapCoordinate, zoom: number) {
         try { map.invalidateSize(true); } catch (e) {}
       }
 
-      function carHtml(heading) {
-        var rot = Number(heading) || 0;
-        return '<div class="car" style="transform:rotate(' + rot + 'deg)">➤</div>';
+      function carIcon(nav) {
+        var fill = nav ? '#1a73e8' : '#0b2545';
+        var html = '<div class="car"><svg viewBox="0 0 48 48" width="34" height="34">'
+          + '<path d="M24 5 L39 40 L24 31 L9 40 Z" fill="' + fill + '" stroke="' + fill + '" stroke-width="2" stroke-linejoin="round"/>'
+          + '</svg></div>';
+        return L.divIcon({ className: '', html: html, iconSize: [46, 46], iconAnchor: [23, 23] });
+      }
+      function rotateCar(h) {
+        var el = extra.car && extra.car.getElement && extra.car.getElement();
+        var inner = el && el.firstChild;
+        if (inner) inner.style.transform = 'rotate(' + (Number(h) || 0) + 'deg)';
       }
 
       window.__moveCar = function (lat, lng, follow, heading, navZoom) {
         if (!valid({ latitude: lat, longitude: lng })) return;
         var ll = [lat, lng];
         var h = Number(heading) || 0;
+        var nav = !!navZoom;
         if (!extra.car) {
-          extra.car = L.marker(ll, { icon: iconHtml(carHtml(h)), zIndexOffset: 900 }).addTo(map);
+          carNav = nav;
+          extra.car = L.marker(ll, { icon: carIcon(nav), zIndexOffset: 900 }).addTo(map);
         } else {
           extra.car.setLatLng(ll);
-          extra.car.setIcon(iconHtml(carHtml(h)));
+          if (carNav !== nav) {
+            carNav = nav;
+            extra.car.setIcon(carIcon(nav));
+          }
         }
+        rotateCar(h);
         if (follow) {
           var z = navZoom || 17;
           // Centra el auto un poco más abajo para ver el camino por delante (estilo Google Maps)
@@ -189,18 +222,49 @@ function buildHtml(initial: MapCoordinate, zoom: number) {
         }
 
         if (routeLine) { map.removeLayer(routeLine); routeLine = null; }
+        if (routeCasing) { map.removeLayer(routeCasing); routeCasing = null; }
         if (state.route && state.route.length > 1) {
           var line = [];
           for (var r = 0; r < state.route.length; r++) {
             if (valid(state.route[r])) line.push([state.route[r].latitude, state.route[r].longitude]);
           }
           if (line.length > 1) {
-            routeLine = L.polyline(line, {
-              color: nav ? '#0f6e54' : '#138a68',
-              weight: nav ? 7 : 5,
-              opacity: 0.95,
+            routeCasing = L.polyline(line, {
+              color: nav ? '#1557b0' : '#ffffff',
+              weight: nav ? 13 : 9,
+              opacity: 1,
               lineCap: 'round',
               lineJoin: 'round'
+            }).addTo(map);
+            routeLine = L.polyline(line, {
+              color: nav ? '#4285f4' : '#138a68',
+              weight: nav ? 9 : 5,
+              opacity: 1,
+              lineCap: 'round',
+              lineJoin: 'round'
+            }).addTo(map);
+          }
+        }
+
+        var mv = state.maneuver;
+        var mvKey = (mv && valid(mv)) ? (mv.latitude + ',' + mv.longitude + ':' + mv.label) : '';
+        if (mvKey !== maneuverKey) {
+          maneuverKey = mvKey;
+          if (maneuverMarker) { map.removeLayer(maneuverMarker); maneuverMarker = null; }
+          if (mvKey) {
+            var wrap = document.createElement('div');
+            wrap.className = 'mwrap';
+            var dot = document.createElement('div');
+            dot.className = 'mdot';
+            var label = document.createElement('div');
+            label.className = 'mlabel';
+            label.textContent = String(mv.label || '');
+            wrap.appendChild(dot);
+            wrap.appendChild(label);
+            maneuverMarker = L.marker([mv.latitude, mv.longitude], {
+              icon: L.divIcon({ className: '', html: wrap, iconSize: [0, 0], iconAnchor: [0, 0] }),
+              zIndexOffset: 800,
+              interactive: false
             }).addTo(map);
           }
         }
@@ -237,6 +301,12 @@ function buildHtml(initial: MapCoordinate, zoom: number) {
         post('press', { latitude: e.latlng.lat, longitude: e.latlng.lng });
       });
 
+      window.__postCenter = function () {
+        var c = map.getCenter();
+        post('center', { latitude: c.lat, longitude: c.lng });
+      };
+      map.on('moveend', window.__postCenter);
+
       setTimeout(resize, 50);
       setTimeout(resize, 400);
       setTimeout(function () { post('ready', {}); }, 200);
@@ -257,7 +327,9 @@ export function OsmWebMap({
   followUser = false,
   navigationMode = false,
   heading = 0,
+  maneuver = null,
   onPressMap,
+  onCenterChange,
 }: Props) {
   const ref = useRef<WebView>(null);
   const ready = useRef(false);
@@ -288,8 +360,24 @@ export function OsmWebMap({
       followUser,
       navigationMode,
       heading: Math.round(heading || 0),
+      maneuver:
+        maneuver && isValidLatLng(maneuver.coordinate)
+          ? { ...maneuver.coordinate, label: maneuver.label }
+          : null,
     });
-  }, [navZoom, destination, userLocation, route, markers, followUser, navigationMode, heading]);
+  }, [
+    navZoom,
+    destination,
+    userLocation,
+    route,
+    markers,
+    followUser,
+    navigationMode,
+    heading,
+    maneuver?.coordinate.latitude,
+    maneuver?.coordinate.longitude,
+    maneuver?.label,
+  ]);
 
   const pushStatic = (extra?: { recenter?: boolean; fit?: boolean }) => {
     if (!ready.current || !ref.current) return;
@@ -304,6 +392,7 @@ export function OsmWebMap({
       followUser: boolean;
       navigationMode: boolean;
       heading: number;
+      maneuver: (MapCoordinate & { label: string }) | null;
     };
     const payload = {
       center: safeCenter,
@@ -315,6 +404,7 @@ export function OsmWebMap({
       followUser: parsed.followUser || parsed.navigationMode,
       navigationMode: parsed.navigationMode,
       heading: parsed.heading,
+      maneuver: parsed.maneuver,
       recenter: extra?.recenter ?? false,
       fit: parsed.navigationMode
         ? false
@@ -348,6 +438,16 @@ export function OsmWebMap({
     }
   }, [car?.latitude, car?.longitude, followUser, navigationMode, heading, navZoom]);
 
+  const reportsCenter = Boolean(onCenterChange);
+  useEffect(() => {
+    if (!reportsCenter || !ready.current || !ref.current) return;
+    try {
+      ref.current.injectJavaScript('try{window.__postCenter&&window.__postCenter();}catch(e){};true;');
+    } catch {
+      // ignore
+    }
+  }, [reportsCenter]);
+
   const onLayout = (e: LayoutChangeEvent) => {
     const { width, height } = e.nativeEvent.layout;
     if (width > 0 && height > 0) setSize({ w: width, h: height });
@@ -366,6 +466,9 @@ export function OsmWebMap({
       }
       if (data.type === 'press' && data.payload && onPressMap && isValidLatLng(data.payload)) {
         onPressMap(data.payload);
+      }
+      if (data.type === 'center' && data.payload && onCenterChange && isValidLatLng(data.payload)) {
+        onCenterChange(data.payload);
       }
     } catch {
       // ignore

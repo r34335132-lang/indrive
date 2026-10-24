@@ -1,3 +1,4 @@
+import { Linking } from 'react-native';
 import type { OsrmStep } from '@/types';
 import { distanceKmBetween, type LatLng } from '@/lib/routing';
 
@@ -44,6 +45,50 @@ export function maneuverIcon(type: string, modifier: string): ManeuverIcon {
   if (m.includes('right')) return 'corner-up-right';
   if (m.includes('straight') || t === 'new name' || t === 'continue') return 'arrow-up';
   return 'navigation';
+}
+
+export type ManeuverGlyph =
+  | 'flag-checkered'
+  | 'navigation-variant'
+  | 'rotate-left'
+  | 'arrow-u-left-top-bold'
+  | 'arrow-left-top-bold'
+  | 'arrow-right-top-bold'
+  | 'arrow-top-left-thick'
+  | 'arrow-top-right-thick'
+  | 'arrow-up-thick';
+
+/** Flechas grandes de giro (MaterialCommunityIcons) para el banner de navegación. */
+export function maneuverGlyph(type: string, modifier: string): ManeuverGlyph {
+  const m = (modifier || '').toLowerCase();
+  const t = (type || '').toLowerCase();
+  if (t === 'arrive' || t === 'destination') return 'flag-checkered';
+  if (t === 'depart') return 'navigation-variant';
+  if (t === 'roundabout' || t === 'rotary' || t === 'roundabout turn') return 'rotate-left';
+  if (m.includes('uturn')) return 'arrow-u-left-top-bold';
+  if (m === 'slight left') return 'arrow-top-left-thick';
+  if (m === 'slight right') return 'arrow-top-right-thick';
+  if (m.includes('left')) return 'arrow-left-top-bold';
+  if (m.includes('right')) return 'arrow-right-top-bold';
+  return 'arrow-up-thick';
+}
+
+export function formatArrivalTime(remainingSeconds: number) {
+  const at = new Date(Date.now() + Math.max(0, remainingSeconds) * 1000);
+  const h24 = at.getHours();
+  const h = h24 % 12 || 12;
+  const mm = at.getMinutes().toString().padStart(2, '0');
+  return `${h}:${mm} ${h24 < 12 ? 'a.m.' : 'p.m.'}`;
+}
+
+/** Abre la navegación en Google Maps o Waze (enlaces universales: app si está instalada, si no navegador). */
+export async function openExternalNavigation(app: 'google' | 'waze', to: LatLng) {
+  const { latitude, longitude } = to;
+  const url =
+    app === 'google'
+      ? `https://www.google.com/maps/dir/?api=1&destination=${latitude},${longitude}&travelmode=driving&dir_action=navigate`
+      : `https://waze.com/ul?ll=${latitude},${longitude}&navigate=yes`;
+  await Linking.openURL(url);
 }
 
 /** Elige el siguiente paso según la posición del conductor. */

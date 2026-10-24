@@ -11,7 +11,7 @@ import {
   TextInput,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRideChat } from '@/hooks/useRideChat';
 import { useColors } from '@/hooks/useColors';
 
@@ -72,6 +72,7 @@ function RideChatSheet({
   onSend: (body: string) => Promise<void>;
 }) {
   const colors = useColors();
+  const insets = useSafeAreaInsets();
   const [draft, setDraft] = useState('');
 
   const submit = async (text: string) => {
@@ -93,7 +94,12 @@ function RideChatSheet({
         style={styles.overlay}
       >
         <Pressable style={styles.backdrop} onPress={onClose} />
-        <SafeAreaView edges={['bottom']} style={[styles.sheet, { backgroundColor: colors.card }]}>
+        <View
+          style={[
+            styles.sheet,
+            { backgroundColor: colors.card, paddingBottom: Math.max(insets.bottom, 12) },
+          ]}
+        >
           <View style={styles.handle} />
           <View style={styles.header}>
             <View>
@@ -167,7 +173,7 @@ function RideChatSheet({
               <Feather name="send" size={16} color="#ffffff" />
             </Pressable>
           </View>
-        </SafeAreaView>
+        </View>
       </KeyboardAvoidingView>
     </Modal>
   );
@@ -196,7 +202,7 @@ const styles = StyleSheet.create({
   },
   badgeText: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 9 },
   overlay: { flex: 1, justifyContent: 'flex-end' },
-  backdrop: { ...StyleSheet.absoluteFillObject, backgroundColor: 'rgba(17,27,23,0.35)' },
+  backdrop: { ...StyleSheet.absoluteFill, backgroundColor: 'rgba(17,27,23,0.35)' },
   sheet: {
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,

@@ -24,7 +24,7 @@ export default function TabLayout() {
     return <Redirect href="/admin" />;
   }
   if (!user) {
-    return <Redirect href="/" />;
+    return <Redirect href="/welcome" />;
   }
 
   return (

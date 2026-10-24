@@ -83,7 +83,7 @@ export default function BookingMapScreen() {
   const requestFromMap = useCallback(async () => {
     if (!coords || !destination || !route || requesting) return;
     if (!user) {
-      router.push('/');
+      router.push('/welcome');
       return;
     }
     setRequesting(true);
@@ -174,7 +174,7 @@ export default function BookingMapScreen() {
 
 const styles = StyleSheet.create({
   screen: { flex: 1 },
-  map: { ...StyleSheet.absoluteFillObject },
+  map: { ...StyleSheet.absoluteFill },
   top: {
     alignItems: 'center',
     flexDirection: 'row',

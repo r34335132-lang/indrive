@@ -5,6 +5,7 @@ import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { DriverPhotoCard } from '@/components/DriverPhotoCard';
 import { LegalLinks } from '@/components/LegalLinks';
 import { DRIVER_DOCUMENTS } from '@/constants/mocks';
 import { useAuth } from '@/context/AuthContext';
@@ -54,7 +55,7 @@ export default function RegisterDriverScreen() {
           <Pressable
             onPress={async () => {
               await logout();
-              router.replace('/');
+              router.replace('/welcome');
             }}
             style={[styles.back, { backgroundColor: colors.card, borderColor: colors.border }]}
           >
@@ -84,6 +85,8 @@ export default function RegisterDriverScreen() {
             Estado revisión: {driverDocs.reviewStatus === 'approved' ? 'Aprobado' : 'Pendiente'}
           </Text>
         </LinearGradient>
+
+        <DriverPhotoCard />
 
         <View style={styles.list}>
           {DRIVER_DOCUMENTS.map((doc) => {

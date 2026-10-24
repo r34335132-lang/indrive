@@ -24,19 +24,62 @@ async function uriToArrayBuffer(uri: string): Promise<ArrayBuffer> {
   return res.arrayBuffer();
 }
 
-/** Pide galería (o cámara) y sube el documento a Storage privado. */
+/**
+ * Foto de perfil del conductor: cámara (selfie) o selector de fotos del sistema.
+ * Se guarda en el bucket público `avatars` y se enlaza en profiles.avatar_url.
+ */
+export async function uploadProfilePhoto(
+  userId: string,
+  source: 'camera' | 'library',
+): Promise<string> {
+  const options: ImagePicker.ImagePickerOptions = {
+    mediaTypes: ['images'],
+    quality: 0.6,
+    allowsEditing: true,
+    aspect: [1, 1],
+  };
+  let result: ImagePicker.ImagePickerResult;
+  if (source === 'camera') {
+    const cam = await ImagePicker.requestCameraPermissionsAsync();
+    if (!cam.granted) {
+      throw new Error('Activa el permiso de cámara en Ajustes para tomarte la foto.');
+    }
+    result = await ImagePicker.launchCameraAsync({
+      ...options,
+      cameraType: ImagePicker.CameraType.front,
+    });
+  } else {
+    result = await ImagePicker.launchImageLibraryAsync(options);
+  }
+  if (result.canceled || !result.assets[0]) throw new Error('CANCELLED');
+
+  const asset = result.assets[0];
+  const mime = asset.mimeType || 'image/jpeg';
+  const ext = mime.includes('png') ? 'png' : mime.includes('webp') ? 'webp' : 'jpg';
+  const path = `${userId}/avatar-${Date.now()}.${ext}`;
+  const body = await uriToArrayBuffer(asset.uri);
+
+  const { error: upError } = await supabase.storage.from('avatars').upload(path, body, {
+    contentType: mime,
+    upsert: true,
+  });
+  if (upError) throw upError;
+
+  const { data } = supabase.storage.from('avatars').getPublicUrl(path);
+  const url = data.publicUrl;
+  const { error } = await supabase.from('profiles').update({ avatar_url: url }).eq('id', userId);
+  if (error) throw error;
+  return url;
+}
+
+/**
+ * Abre el selector de fotos del sistema (Android Photo Picker / PHPicker en iOS) y sube el
+ * documento a Storage privado. El selector del sistema no requiere permisos de galería.
+ */
 export async function uploadDriverDocument(
   userId: string,
   key: DriverDocumentKey,
 ): Promise<DriverDocs> {
-  const library = await ImagePicker.requestMediaLibraryPermissionsAsync();
-  if (!library.granted) {
-    const cam = await ImagePicker.requestCameraPermissionsAsync();
-    if (!cam.granted) {
-      throw new Error('Necesitamos permiso de cámara o galería para subir documentos.');
-    }
-  }
-
   const result = await ImagePicker.launchImageLibraryAsync({
     mediaTypes: ['images'],
     quality: 0.7,

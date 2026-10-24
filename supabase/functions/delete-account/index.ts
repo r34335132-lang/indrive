@@ -62,14 +62,17 @@ Deno.serve(async (req) => {
         driver_car: null,
         driver_plate: null,
         driver_rating: null,
+        driver_photo_url: null,
       })
       .eq('driver_id', userId);
 
-    // Borrar documentos privados del storage
-    const { data: files } = await admin.storage.from('driver-docs').list(userId);
-    if (files?.length) {
-      const paths = files.map((f) => `${userId}/${f.name}`);
-      await admin.storage.from('driver-docs').remove(paths);
+    // Borrar documentos privados y foto de perfil del storage
+    for (const bucket of ['driver-docs', 'avatars']) {
+      const { data: files } = await admin.storage.from(bucket).list(userId);
+      if (files?.length) {
+        const paths = files.map((f: { name: string }) => `${userId}/${f.name}`);
+        await admin.storage.from(bucket).remove(paths);
+      }
     }
 
     // Cascades: profiles → driver_documents

@@ -337,11 +337,442 @@ function inLagunaRegion(lat: number, lng: number) {
   return lat >= 25.32 && lat <= 25.78 && lng >= -103.82 && lng <= -103.12;
 }
 
+function isValidPoint(point?: LatLng | null): point is LatLng {
+  return !!point && Number.isFinite(point.latitude) && Number.isFinite(point.longitude);
+}
+
+/** Sin ubicación se asume La Laguna (zona principal de operación). */
+export function isInLaguna(point?: LatLng | null) {
+  if (!isValidPoint(point)) return true;
+  return inLagunaRegion(point.latitude, point.longitude);
+}
+
+const OSM_HEADERS = {
+  Accept: 'application/json',
+  'User-Agent': 'inride-app/1.0 (com.inride.app)',
+};
+
+type NominatimItem = {
+  display_name?: string;
+  name?: string;
+  lat: string;
+  lon: string;
+  address?: Record<string, string>;
+};
+
+function cityFromAddress(address: Record<string, string> | undefined, display: string) {
+  const a = address ?? {};
+  const area = a.suburb || a.neighbourhood || a.quarter || '';
+  const city = a.city || a.town || a.village || a.municipality || a.county || '';
+  const label = [area, city].filter(Boolean).join(', ');
+  return label || display.split(',').slice(1, 3).join(',').trim();
+}
+
+function dedupeByName(list: Place[]) {
+  const out: Place[] = [];
+  for (const place of list) {
+    const key = place.name.toLowerCase();
+    if (!out.some((p) => p.name.toLowerCase() === key)) out.push(place);
+  }
+  return out;
+}
+
+async function fetchJsonWithTimeout<T>(url: string, init?: RequestInit, ms = 12000): Promise<T> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), ms);
+  try {
+    const res = await fetch(url, { ...init, signal: controller.signal });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return (await res.json()) as T;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+function normalizeText(text: string) {
+  return text.toLowerCase().normalize('NFD').replace(/\p{M}/gu, '').trim();
+}
+
+function formatKm(km: number) {
+  return km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`;
+}
+
+function withDistance(place: Place, near: LatLng): Place {
+  const km = haversineKm(near, place.coordinate);
+  return { ...place, city: [place.city, formatKm(km)].filter(Boolean).join(' · ') };
+}
+
+/** Evita duplicados exactos pero conserva sucursales distintas con el mismo nombre. */
+function dedupeByPlace(list: Place[]) {
+  const seen = new Set<string>();
+  const out: Place[] = [];
+  for (const place of list) {
+    const key = `${normalizeText(place.name)}|${place.coordinate.latitude.toFixed(3)}|${place.coordinate.longitude.toFixed(3)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(place);
+  }
+  return out;
+}
+
+/** Palabras comunes → etiquetas de OpenStreetMap para buscar por tipo de lugar. */
+const CATEGORY_TAGS: Array<{ words: string[]; filter: string }> = [
+  {
+    words: ['escuela', 'colegio', 'primaria', 'secundaria', 'kinder', 'jardin de ninos', 'preparatoria', 'prepa', 'bachillerato', 'cbtis', 'conalep'],
+    filter: '[amenity~"^(school|kindergarten|college)$"]',
+  },
+  { words: ['universidad', 'facultad', 'tecnologico', 'instituto'], filter: '[amenity~"^(university|college)$"]' },
+  { words: ['hospital', 'clinica', 'imss', 'issste', 'cruz roja', 'urgencias', 'consultorio', 'doctor', 'medico'], filter: '[amenity~"^(hospital|clinic|doctors)$"]' },
+  { words: ['farmacia', 'botica'], filter: '[amenity=pharmacy]' },
+  { words: ['banco', 'cajero'], filter: '[amenity~"^(bank|atm)$"]' },
+  { words: ['gasolinera', 'gasolina', 'pemex'], filter: '[amenity=fuel]' },
+  { words: ['supermercado', 'super', 'soriana', 'walmart', 'ley', 'chedraui', 'bodega'], filter: '[shop~"^(supermarket|department_store)$"]' },
+  { words: ['oxxo', 'tienda', 'abarrotes', 'minisuper'], filter: '[shop~"^(convenience|general)$"]' },
+  { words: ['plaza comercial', 'centro comercial', 'mall', 'plaza'], filter: '[shop=mall]' },
+  { words: ['parque', 'jardin', 'alameda'], filter: '[leisure~"^(park|garden)$"]' },
+  { words: ['restaurante', 'restaurant', 'comida', 'tacos', 'pizza', 'hamburguesa'], filter: '[amenity~"^(restaurant|fast_food)$"]' },
+  { words: ['cafe', 'cafeteria'], filter: '[amenity=cafe]' },
+  { words: ['bar', 'cantina'], filter: '[amenity~"^(bar|pub)$"]' },
+  { words: ['iglesia', 'templo', 'parroquia', 'catedral'], filter: '[amenity=place_of_worship]' },
+  { words: ['gimnasio', 'gym'], filter: '[leisure=fitness_centre]' },
+  { words: ['hotel', 'motel'], filter: '[tourism~"^(hotel|motel)$"]' },
+  { words: ['central de autobuses', 'camionera', 'autobuses', 'terminal'], filter: '[amenity=bus_station]' },
+  { words: ['aeropuerto'], filter: '[aeroway=aerodrome]' },
+  { words: ['cine', 'cinepolis', 'cinemex'], filter: '[amenity=cinema]' },
+  { words: ['mercado'], filter: '[amenity=marketplace]' },
+  { words: ['policia', 'ministerio publico', 'fiscalia'], filter: '[amenity=police]' },
+  { words: ['estadio', 'unidad deportiva', 'deportiva'], filter: '[leisure~"^(stadium|sports_centre)$"]' },
+  { words: ['museo'], filter: '[tourism=museum]' },
+];
+
+function categoryFilterFor(text: string): string | null {
+  const q = normalizeText(text);
+  const words = q.split(/\s+/).filter(Boolean);
+  const variants = new Set<string>();
+  for (const w of words) {
+    variants.add(w);
+    if (w.length > 3 && w.endsWith('s')) variants.add(w.slice(0, -1));
+    if (w.length > 4 && w.endsWith('es')) variants.add(w.slice(0, -2));
+  }
+  const padded = ` ${q} `;
+  for (const category of CATEGORY_TAGS) {
+    for (const key of category.words) {
+      if (key.includes(' ')) {
+        if (padded.includes(` ${key}`)) return category.filter;
+      } else if (variants.has(key)) {
+        return category.filter;
+      }
+    }
+  }
+  // Escritura incompleta de una sola palabra ("escue", "farmac").
+  if (words.length === 1 && words[0].length >= 4) {
+    for (const category of CATEGORY_TAGS) {
+      if (category.words.some((key) => !key.includes(' ') && key.startsWith(words[0]))) {
+        return category.filter;
+      }
+    }
+  }
+  return null;
+}
+
+const categoryCache = new Map<string, Place[]>();
+
+async function searchCategory(filter: string, near: LatLng): Promise<Place[]> {
+  const key = `${filter}|${near.latitude.toFixed(2)},${near.longitude.toFixed(2)}`;
+  const cached = categoryCache.get(key);
+  if (cached) return cached;
+  const around = `around:9000,${near.latitude},${near.longitude}`;
+  const query = `[out:json][timeout:10];nwr(${around})${filter}[name];out center 80;`;
+  const elements = await firstSuccessful(
+    OVERPASS_MIRRORS.map((url) => async () => {
+      const data = await fetchJsonWithTimeout<{ elements?: OverpassElement[] }>(
+        url,
+        {
+          method: 'POST',
+          headers: { ...OSM_HEADERS, 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `data=${encodeURIComponent(query)}`,
+        },
+        9000,
+      );
+      if (!data.elements) throw new Error('bad response');
+      return data.elements;
+    }),
+  );
+  const places = elements
+    .map((el): Place | null => {
+      const latitude = el.lat ?? el.center?.lat;
+      const longitude = el.lon ?? el.center?.lon;
+      const tags = el.tags ?? {};
+      if (!tags.name || latitude == null || longitude == null) return null;
+      const street = [tags['addr:street'], tags['addr:housenumber']].filter(Boolean).join(' ');
+      return {
+        name: tags.name,
+        aliases: [],
+        coordinate: { latitude, longitude },
+        city: street || tags['addr:suburb'] || tags['addr:city'] || '',
+      };
+    })
+    .filter((p): p is Place => p !== null);
+  categoryCache.set(key, places);
+  return places;
+}
+
+type PhotonFeature = {
+  geometry?: { coordinates?: [number, number] };
+  properties?: Record<string, string | undefined>;
+};
+
+async function searchPhoton(text: string, near: LatLng): Promise<Place[]> {
+  const url =
+    `https://photon.komoot.io/api/?limit=15&lat=${near.latitude}&lon=${near.longitude}` +
+    `&location_bias_scale=0.2&q=${encodeURIComponent(text)}`;
+  const data = await fetchJsonWithTimeout<{ features?: PhotonFeature[] }>(url, { headers: OSM_HEADERS }, 8000);
+  return (data.features ?? [])
+    .map((f): Place | null => {
+      const [longitude, latitude] = f.geometry?.coordinates ?? [];
+      const p = f.properties ?? {};
+      if (p.countrycode && p.countrycode.toUpperCase() !== 'MX') return null;
+      if (typeof latitude !== 'number' || typeof longitude !== 'number') return null;
+      if (!Number.isFinite(latitude) || !Number.isFinite(longitude)) return null;
+      const street = [p.street, p.housenumber].filter(Boolean).join(' ');
+      const name = p.name || street || text;
+      const area = [p.district || p.locality, p.city || p.county].filter(Boolean).join(', ');
+      return {
+        name,
+        aliases: [[name, street, area, p.state].filter(Boolean).join(', ')],
+        coordinate: { latitude, longitude },
+        city: [p.name && street ? street : '', area].filter(Boolean).join(', '),
+      };
+    })
+    .filter((p): p is Place => p !== null);
+}
+
+async function searchNominatim(text: string, near: LatLng): Promise<Place[]> {
+  const d = 0.35;
+  const viewbox = `${near.longitude - d},${near.latitude + d},${near.longitude + d},${near.latitude - d}`;
+  const url =
+    `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=15` +
+    `&countrycodes=mx&viewbox=${viewbox}&bounded=1&q=${encodeURIComponent(text)}`;
+  const data = await fetchJsonWithTimeout<NominatimItem[]>(url, { headers: OSM_HEADERS }, 8000);
+  return data
+    .map((item): Place => {
+      const display = item.display_name ?? '';
+      return {
+        name: item.name || display.split(',')[0] || text,
+        aliases: [display],
+        coordinate: { latitude: Number(item.lat), longitude: Number(item.lon) },
+        city: cityFromAddress(item.address, display),
+      };
+    })
+    .filter((p) => Number.isFinite(p.coordinate.latitude) && Number.isFinite(p.coordinate.longitude));
+}
+
+/**
+ * Búsqueda libre alrededor del usuario: combina Photon (tolerante a errores),
+ * Nominatim (direcciones) y Overpass por categoría ("escuelas", "farmacia"…).
+ */
+async function searchAround(text: string, near: LatLng, extra: Place[] = []): Promise<Place[]> {
+  const filter = categoryFilterFor(text);
+  const [category, photon, nominatim] = await Promise.all([
+    filter ? searchCategory(filter, near).catch(() => [] as Place[]) : Promise.resolve([] as Place[]),
+    searchPhoton(text, near).catch(() => [] as Place[]),
+    searchNominatim(text, near).catch(() => [] as Place[]),
+  ]);
+
+  const MAX_KM = 60;
+  const byDistance = (list: Place[]) =>
+    list
+      .filter((p) => haversineKm(near, p.coordinate) <= MAX_KM)
+      .sort((a, b) => haversineKm(near, a.coordinate) - haversineKm(near, b.coordinate));
+
+  const merged = dedupeByPlace([
+    ...extra,
+    ...byDistance(category).slice(0, 25),
+    ...byDistance([...photon, ...nominatim]),
+  ]);
+  return merged.slice(0, 40).map((p) => withDistance(p, near));
+}
+
+type OverpassElement = {
+  lat?: number;
+  lon?: number;
+  center?: { lat: number; lon: number };
+  tags?: Record<string, string>;
+};
+
+const POI_LABELS: Record<string, string> = {
+  hospital: 'Hospital',
+  clinic: 'Clínica',
+  university: 'Universidad',
+  college: 'Escuela',
+  bus_station: 'Central de autobuses',
+  marketplace: 'Mercado',
+  cinema: 'Cine',
+  townhall: 'Presidencia',
+  mall: 'Plaza comercial',
+  supermarket: 'Supermercado',
+  department_store: 'Tienda departamental',
+  park: 'Parque',
+  stadium: 'Estadio',
+  museum: 'Museo',
+  attraction: 'Atracción',
+  aerodrome: 'Aeropuerto',
+};
+
+const nearbyCache = new Map<string, Place[]>();
+
+async function fetchNearbyPois(near: LatLng): Promise<Place[]> {
+  const key = `${near.latitude.toFixed(2)},${near.longitude.toFixed(2)}`;
+  const cached = nearbyCache.get(key);
+  if (cached) return cached;
+
+  const around = `around:7000,${near.latitude},${near.longitude}`;
+  const query =
+    `[out:json][timeout:12];(` +
+    `nwr(${around})[amenity~"^(hospital|university|college|bus_station|marketplace|cinema|townhall)$"][name];` +
+    `nwr(${around})[shop~"^(mall|supermarket|department_store)$"][name];` +
+    `nwr(${around})[leisure~"^(park|stadium)$"][name];` +
+    `nwr(${around})[tourism~"^(museum|attraction)$"][name];` +
+    `nwr(${around})[aeroway=aerodrome][name];` +
+    `);out center 80;`;
+
+  const elements = await firstSuccessful(
+    OVERPASS_MIRRORS.map((url) => async () => {
+      const data = await fetchJsonWithTimeout<{ elements?: OverpassElement[] }>(
+        url,
+        {
+          method: 'POST',
+          headers: { ...OSM_HEADERS, 'Content-Type': 'application/x-www-form-urlencoded' },
+          body: `data=${encodeURIComponent(query)}`,
+        },
+        9000,
+      );
+      if (!data.elements?.length) throw new Error('empty');
+      return data.elements;
+    }),
+  ).catch(() => [] as OverpassElement[]);
+
+  const places = elements
+    .map((el): Place | null => {
+      const latitude = el.lat ?? el.center?.lat;
+      const longitude = el.lon ?? el.center?.lon;
+      const tags = el.tags ?? {};
+      if (!tags.name || latitude == null || longitude == null) return null;
+      const kind =
+        tags.amenity || tags.shop || tags.leisure || tags.tourism || tags.aeroway || '';
+      const coordinate = { latitude, longitude };
+      const km = haversineKm(near, coordinate);
+      const label = POI_LABELS[kind] ?? 'Lugar';
+      return {
+        name: tags.name,
+        aliases: [],
+        coordinate,
+        city: `${label} · ${km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`}`,
+      };
+    })
+    .filter((p): p is Place => p !== null)
+    .sort((a, b) => haversineKm(near, a.coordinate) - haversineKm(near, b.coordinate));
+
+  let result = dedupeByName(places);
+  if (!result.length) result = await nearbyByKeywords(near);
+  if (result.length) nearbyCache.set(key, result);
+  return result;
+}
+
+const OVERPASS_MIRRORS = [
+  'https://overpass-api.de/api/interpreter',
+  'https://overpass.kumi.systems/api/interpreter',
+  'https://maps.mail.ru/osm/tools/overpass/api/interpreter',
+];
+
+/** Resuelve con la primera tarea que tenga éxito (en paralelo). */
+function firstSuccessful<T>(tasks: Array<() => Promise<T>>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    let pending = tasks.length;
+    if (!pending) reject(new Error('no tasks'));
+    for (const task of tasks) {
+      task().then(resolve, () => {
+        pending -= 1;
+        if (pending === 0) reject(new Error('all failed'));
+      });
+    }
+  });
+}
+
+const NEARBY_KEYWORDS = ['hospital', 'plaza comercial', 'supermercado', 'parque', 'central de autobuses'];
+
+/** Respaldo con Nominatim (secuencial para respetar su límite de 1 petición/seg). */
+async function nearbyByKeywords(near: LatLng): Promise<Place[]> {
+  const d = 0.08;
+  const viewbox = `${near.longitude - d},${near.latitude + d},${near.longitude + d},${near.latitude - d}`;
+  const found: Place[] = [];
+  for (const keyword of NEARBY_KEYWORDS) {
+    try {
+      const data = await fetchJsonWithTimeout<NominatimItem[]>(
+        `https://nominatim.openstreetmap.org/search?format=jsonv2&addressdetails=1&limit=4` +
+          `&countrycodes=mx&bounded=1&viewbox=${viewbox}&q=${encodeURIComponent(keyword)}`,
+        { headers: OSM_HEADERS },
+        7000,
+      );
+      for (const item of data) {
+        const coordinate = { latitude: Number(item.lat), longitude: Number(item.lon) };
+        if (!Number.isFinite(coordinate.latitude) || !Number.isFinite(coordinate.longitude)) continue;
+        const display = item.display_name ?? '';
+        const km = haversineKm(near, coordinate);
+        found.push({
+          name: item.name || display.split(',')[0] || keyword,
+          aliases: [display],
+          coordinate,
+          city: `${cityFromAddress(item.address, display)} · ${km < 1 ? `${Math.round(km * 1000)} m` : `${km.toFixed(1)} km`}`,
+        });
+      }
+    } catch {
+      // sigue con la siguiente categoría
+    }
+    if (found.length >= 12) break;
+  }
+  return dedupeByName(found).sort(
+    (a, b) => haversineKm(near, a.coordinate) - haversineKm(near, b.coordinate),
+  );
+}
+
+/**
+ * Lugares cercanos a donde está el usuario. En La Laguna usa el catálogo local;
+ * en cualquier otra ciudad consulta OpenStreetMap alrededor de su ubicación.
+ */
+export async function nearbyPlaces(near: LatLng | null | undefined, limit = 12): Promise<Place[]> {
+  if (!isValidPoint(near)) return featuredPlaces(limit);
+  if (isInLaguna(near)) return placesNear(near, limit);
+  try {
+    return (await fetchNearbyPois(near)).slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
 export async function searchPlaces(
   query: string,
   near?: LatLng | null,
 ): Promise<Place[]> {
   const text = query.trim();
+
+  if (isValidPoint(near) && (!isInLaguna(near) || text.length >= 2)) {
+    if (text.length < 2) return nearbyPlaces(near, 18);
+    const q = normalizeText(text);
+    const localMatches = isInLaguna(near)
+      ? LAGUNA_PLACES.filter((place) =>
+          normalizeText(`${place.name} ${place.aliases.join(' ')}`).includes(q),
+        )
+          .sort((a, b) => haversineKm(near, a.coordinate) - haversineKm(near, b.coordinate))
+          .slice(0, 5)
+      : [];
+    try {
+      return await searchAround(text, near, localMatches);
+    } catch {
+      return localMatches;
+    }
+  }
+
   if (text.length < 2) {
     // Vacío: cerca de ti + mezcla de las 3 ciudades
     const nearby = placesNear(near, 8);
@@ -389,19 +820,9 @@ export async function searchPlaces(
           `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&countrycodes=mx` +
           `&viewbox=${LAGUNA_VIEWBOX}&bounded=1${bias}&q=` +
           encodeURIComponent(term);
-        const res = await fetch(url, {
-          headers: {
-            Accept: 'application/json',
-            'User-Agent': 'inride-app/1.0 (com.inride.app)',
-          },
-        });
+        const res = await fetch(url, { headers: OSM_HEADERS });
         if (!res.ok) return;
-        const data = (await res.json()) as Array<{
-          display_name?: string;
-          name?: string;
-          lat: string;
-          lon: string;
-        }>;
+        const data = (await res.json()) as NominatimItem[];
         for (const item of data) {
           const latitude = Number(item.lat);
           const longitude = Number(item.lon);
@@ -465,12 +886,15 @@ export async function reverseGeocode(lat: number, lng: number): Promise<string> 
       address?: Record<string, string>;
     };
     const address = data.address ?? {};
+    const street = address.road
+      ? [address.road, address.house_number].filter(Boolean).join(' ')
+      : undefined;
     const parts = [
-      address.road,
-      address.suburb || address.neighbourhood,
-      address.city || address.town || address.village || address.county,
+      street,
+      address.suburb || address.neighbourhood || address.quarter,
+      address.city || address.town || address.village || address.municipality || address.county,
     ].filter(Boolean);
-    return parts.slice(0, 2).join(', ') || data.name || data.display_name || '';
+    return parts.join(', ') || data.name || data.display_name || '';
   } catch {
     return '';
   }

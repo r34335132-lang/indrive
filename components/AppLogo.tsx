@@ -1,11 +1,11 @@
-import { Image, StyleSheet, View } from 'react-native';
+import { StyleSheet, View } from 'react-native';
+import { InrideMark } from '@/components/InrideMark';
 
-const logoSource = require('@/assets/images/inride-logo.jpg');
-
-export function AppLogo({ large = false }: { light?: boolean; large?: boolean }) {
+export function AppLogo({ light = false, large = false }: { light?: boolean; large?: boolean }) {
+  const size = large ? 76 : 40;
   return (
     <View style={[styles.wrap, large && styles.wrapLarge]}>
-      <Image source={logoSource} style={[styles.logo, large && styles.logoLarge]} resizeMode="contain" />
+      <InrideMark size={size} tone={light ? 'light' : 'dark'} />
     </View>
   );
 }
@@ -18,15 +18,7 @@ const styles = StyleSheet.create({
     width: 48,
   },
   wrapLarge: {
-    height: 88,
-    width: 88,
-  },
-  logo: {
-    height: 48,
-    width: 48,
-  },
-  logoLarge: {
-    height: 88,
+    height: 92,
     width: 88,
   },
 });

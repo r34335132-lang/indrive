@@ -24,6 +24,7 @@ type ProfileRow = {
   vehicle_model: string | null;
   vehicle_color: string | null;
   vehicle_plate: string | null;
+  avatar_url?: string | null;
   block_fee_satisfied?: boolean | null;
 };
 
@@ -51,6 +52,7 @@ type RideRow = {
   driver_rating: number | null;
   driver_car: string | null;
   driver_plate: string | null;
+  driver_photo_url?: string | null;
   rating: number | null;
   comment: string | null;
   scheduled_date: string | null;
@@ -125,6 +127,7 @@ export function mapProfile(row: ProfileRow): Profile {
     vehicleModel: row.vehicle_model ?? undefined,
     vehicleColor: row.vehicle_color ?? undefined,
     vehiclePlate: row.vehicle_plate ?? undefined,
+    avatarUrl: row.avatar_url ?? undefined,
     blockFeeSatisfied: Boolean(row.block_fee_satisfied),
   };
 }
@@ -179,6 +182,7 @@ export function mapRide(row: RideRow): Ride {
     driverRating: row.driver_rating != null ? Number(row.driver_rating) : null,
     driverCar: row.driver_car,
     driverPlate: row.driver_plate,
+    driverPhotoUrl: row.driver_photo_url ?? null,
     rating: row.rating,
     comment: row.comment,
     scheduledDate: row.scheduled_date,

@@ -15,7 +15,9 @@ type Props = {
   followUser?: boolean;
   navigationMode?: boolean;
   heading?: number;
+  maneuver?: { coordinate: MapCoordinate; label: string } | null;
   onPressMap?: (point: MapCoordinate) => void;
+  onCenterChange?: (point: MapCoordinate) => void;
 };
 
 /** Mapa de inride: OpenStreetMap (Leaflet en WebView). Sin Google Maps. */

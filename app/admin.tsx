@@ -153,7 +153,7 @@ export default function AdminScreen() {
       await setDriverDocsReviewStatus(
         userId,
         status,
-        status === 'rejected' ? 'Documentos rechazados. Vuelve a subirlos.' : null,
+        status === 'rejected' ? 'Documentos rechazados. Vuelve a subirlos.' : undefined,
       );
       await loadDrivers();
       Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -225,7 +225,7 @@ export default function AdminScreen() {
     return <Redirect href="/driver" />;
   }
   if (isReady && !user) {
-    return <Redirect href="/" />;
+    return <Redirect href="/welcome" />;
   }
   const getDraftValue = (key: TariffNumericKey) => {
     if (draft[key] !== undefined) return draft[key];
@@ -255,14 +255,14 @@ export default function AdminScreen() {
 
   const handleLogout = async () => {
     await logout();
-    router.replace('/');
+    router.replace('/welcome');
   };
 
   return (
     <SafeAreaView style={[styles.safe, { backgroundColor: colors.background }]} edges={['top']}>
       <LinearGradient colors={['#16362f', '#1f4f43']} style={styles.hero}>
         <View style={styles.header}>
-          <AppLogo large />
+          <AppLogo large light />
           <View style={styles.headerCopy}>
             <Text style={styles.eyebrow}>PANEL ADMIN</Text>
             <Text style={styles.title}>INRIDE Control</Text>
