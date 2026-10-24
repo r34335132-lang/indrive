@@ -1,5 +1,5 @@
 import { supabase } from './supabase';
-import type { DriverDocsRow, Profile, ReviewStatus, Ride, Tariff } from './types';
+import type { DriverDeposit, DriverDocsRow, Profile, ReviewStatus, Ride, Tariff } from './types';
 
 export async function fetchProfiles(): Promise<Profile[]> {
   const { data, error } = await supabase
@@ -34,6 +34,22 @@ export async function fetchRides(limit = 2000): Promise<Ride[]> {
     airport_toll: Number(r.airport_toll) || 0,
     distance_km: Number(r.distance_km) || 0,
   }));
+}
+
+/** Vacío si la migración 015 aún no se ha corrido, para no romper el resto del panel. */
+export async function fetchDeposits(): Promise<DriverDeposit[]> {
+  const { data, error } = await supabase
+    .from('driver_deposits')
+    .select(
+      'id, driver_id, amount, currency, status, mp_preference_id, mp_payment_id, mp_status_detail, paid_at, created_at, updated_at',
+    )
+    .order('created_at', { ascending: false })
+    .limit(2000);
+  if (error) {
+    console.warn('driver_deposits', error.message);
+    return [];
+  }
+  return ((data ?? []) as DriverDeposit[]).map((d) => ({ ...d, amount: Number(d.amount) || 0 }));
 }
 
 export async function fetchActiveTariff(): Promise<Tariff | null> {

@@ -8,6 +8,7 @@ import {
   Route as RouteIcon,
   SlidersHorizontal,
   Users,
+  Wallet,
   X,
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
@@ -23,6 +24,7 @@ const NAV: { id: Route; label: string; icon: typeof Car }[] = [
   { id: 'applications', label: 'Solicitudes', icon: FileCheck2 },
   { id: 'drivers', label: 'Conductores', icon: Car },
   { id: 'trips', label: 'Viajes', icon: RouteIcon },
+  { id: 'deposits', label: 'Depósitos', icon: Wallet },
   { id: 'passengers', label: 'Pasajeros', icon: Users },
   { id: 'tariffs', label: 'Tarifas', icon: SlidersHorizontal },
 ];

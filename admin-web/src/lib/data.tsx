@@ -8,14 +8,15 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { fetchDriverDocs, fetchProfiles, fetchRides } from './api';
+import { fetchDeposits, fetchDriverDocs, fetchProfiles, fetchRides } from './api';
 import { supabase } from './supabase';
-import type { Driver, DriverDocsRow, Passenger, Profile, Ride } from './types';
+import type { Driver, DriverDeposit, DriverDocsRow, Passenger, Profile, Ride } from './types';
 
 type AdminData = {
   profiles: Profile[];
   docs: DriverDocsRow[];
   rides: Ride[];
+  deposits: DriverDeposit[];
   drivers: Driver[];
   passengers: Passenger[];
   loading: boolean;
@@ -31,6 +32,7 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [docs, setDocs] = useState<DriverDocsRow[]>([]);
   const [rides, setRides] = useState<Ride[]>([]);
+  const [deposits, setDeposits] = useState<DriverDeposit[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [live, setLive] = useState(false);
@@ -39,10 +41,16 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
 
   const refresh = useCallback(async () => {
     try {
-      const [p, d, r] = await Promise.all([fetchProfiles(), fetchDriverDocs(), fetchRides()]);
+      const [p, d, r, dep] = await Promise.all([
+        fetchProfiles(),
+        fetchDriverDocs(),
+        fetchRides(),
+        fetchDeposits(),
+      ]);
       setProfiles(p);
       setDocs(d);
       setRides(r);
+      setDeposits(dep);
       setError(null);
       setLastUpdated(new Date());
     } catch (e) {
@@ -66,6 +74,7 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
       .on('postgres_changes', { event: '*', schema: 'public', table: 'rides' }, scheduleRefresh)
       .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_documents' }, scheduleRefresh)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'profiles' }, scheduleRefresh)
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'driver_deposits' }, scheduleRefresh)
       .subscribe((status) => setLive(status === 'SUBSCRIBED'));
 
     return () => {
@@ -120,6 +129,7 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
       profiles,
       docs,
       rides,
+      deposits,
       drivers,
       passengers,
       loading,
@@ -128,7 +138,7 @@ export function AdminDataProvider({ children }: { children: ReactNode }) {
       lastUpdated,
       refresh,
     }),
-    [docs, drivers, error, lastUpdated, live, loading, passengers, profiles, refresh, rides],
+    [deposits, docs, drivers, error, lastUpdated, live, loading, passengers, profiles, refresh, rides],
   );
 
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;

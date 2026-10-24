@@ -41,6 +41,40 @@ export async function startCardPayment(rideId: string): Promise<CreatePaymentRes
   return json;
 }
 
+/**
+ * Abre Checkout Pro para pagar el depósito del conductor (bloque de sistema).
+ * El webhook marca el depósito como cubierto cuando Mercado Pago aprueba el pago.
+ */
+export async function startDepositPayment(): Promise<{ alreadyPaid: boolean }> {
+  const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
+  if (sessionError || !sessionData.session?.access_token) {
+    throw new Error('Inicia sesión para pagar');
+  }
+  const base = process.env.EXPO_PUBLIC_SUPABASE_URL;
+  if (!base) throw new Error('Falta EXPO_PUBLIC_SUPABASE_URL');
+
+  const res = await fetch(`${base}/functions/v1/create-deposit-payment`, {
+    method: 'POST',
+    headers: {
+      Authorization: `Bearer ${sessionData.session.access_token}`,
+      apikey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '',
+      'Content-Type': 'application/json',
+    },
+    body: '{}',
+  });
+  const json = (await res.json().catch(() => ({}))) as {
+    initPoint?: string;
+    alreadyPaid?: boolean;
+    error?: string;
+  };
+  if (!res.ok) throw new Error(json.error || 'No se pudo iniciar el pago');
+  if (json.alreadyPaid) return { alreadyPaid: true };
+  if (!json.initPoint) throw new Error('Mercado Pago no devolvió URL de pago');
+
+  await WebBrowser.openAuthSessionAsync(json.initPoint, 'inride://payment/deposit');
+  return { alreadyPaid: false };
+}
+
 export async function refreshRidePayment(rideId: string) {
   const { data, error } = await supabase
     .from('rides')

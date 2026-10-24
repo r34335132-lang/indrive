@@ -4,6 +4,7 @@ import * as Haptics from 'expo-haptics';
 import { Redirect, type Href, useRouter } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  ActivityIndicator,
   Animated,
   Easing,
   Modal,
@@ -51,7 +52,19 @@ function tripTime(trip: Trip) {
 export default function DriverScreen() {
   const colors = useColors();
   const router = useRouter();
-  const { user, logout, deleteAccount, docsComplete, docsApproved, blockFeeSatisfied, satisfyBlockFee, isReady, role } = useAuth();
+  const {
+    user,
+    logout,
+    deleteAccount,
+    docsComplete,
+    docsApproved,
+    blockFeeSatisfied,
+    satisfyBlockFee,
+    payBlockFee,
+    refreshProfile,
+    isReady,
+    role,
+  } = useAuth();
   const { trips, openRides, acceptRideAsDriver, activeRide } = useBooking();
   const { tariff } = useTariff();
 
@@ -64,6 +77,11 @@ export default function DriverScreen() {
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [showDelete, setShowDelete] = useState(false);
   const [showPhoto, setShowPhoto] = useState(false);
+  const [paying, setPaying] = useState(false);
+  const [payMessage, setPayMessage] = useState<{ tone: 'ok' | 'info' | 'error'; text: string } | null>(
+    null,
+  );
+  const autoFeeTried = useRef(false);
   const [deleting, setDeleting] = useState(false);
   const notifiedId = useRef<string | null>(null);
 
@@ -119,10 +137,45 @@ export default function DriverScreen() {
       : null;
 
   useEffect(() => {
-    if (!blockFeeSatisfied && lifetimeEarnings >= blockFee) {
-      void satisfyBlockFee();
+    if (!blockFeeSatisfied && lifetimeEarnings >= blockFee && !autoFeeTried.current) {
+      autoFeeTried.current = true;
+      void satisfyBlockFee().catch(() => {});
     }
   }, [blockFeeSatisfied, lifetimeEarnings, blockFee, satisfyBlockFee]);
+
+  const payDeposit = async () => {
+    if (paying) return;
+    setPayMessage(null);
+    setPaying(true);
+    try {
+      const confirmed = await payBlockFee();
+      if (confirmed) {
+        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
+        setPayMessage({ tone: 'ok', text: '¡Depósito confirmado! Ya puedes recibir viajes.' });
+      } else {
+        setPayMessage({
+          tone: 'info',
+          text: 'Si completaste el pago, Mercado Pago lo confirmará en unos minutos. Toca "Ya pagué, verificar".',
+        });
+      }
+    } catch (e) {
+      setPayMessage({
+        tone: 'error',
+        text: e instanceof Error ? e.message : 'No se pudo abrir Mercado Pago',
+      });
+    } finally {
+      setPaying(false);
+    }
+  };
+
+  const verifyDeposit = async () => {
+    setPaying(true);
+    try {
+      await refreshProfile();
+    } finally {
+      setPaying(false);
+    }
+  };
 
   useEffect(() => {
     if (!canWork && online) setOnline(false);
@@ -293,18 +346,51 @@ export default function DriverScreen() {
                   Bloque de sistema · {formatMoney(blockFee)}
                 </Text>
                 <Text style={[styles.blockCopy, { color: colors.mutedForeground }]}>
-                  Para recibir viajes cubre el bloque (depósito) o alcánzalo con tus ganancias.
-                  Llevas {formatMoney(lifetimeEarnings)} de {formatMoney(blockFee)}.
+                  Para recibir viajes paga el depósito con Mercado Pago (tarjeta, OXXO o saldo) o
+                  alcánzalo con tus ganancias. Llevas {formatMoney(lifetimeEarnings)} de{' '}
+                  {formatMoney(blockFee)}.
                 </Text>
                 <View style={styles.blockTrack}>
                   <View style={[styles.blockFill, { width: `${Math.round(blockProgress * 100)}%` }]} />
                 </View>
                 <Pressable
-                  onPress={() => void satisfyBlockFee()}
-                  style={[styles.blockBtn, { backgroundColor: colors.primary }]}
+                  onPress={() => void payDeposit()}
+                  disabled={paying}
+                  style={[styles.blockBtn, styles.mpBtn, paying && { opacity: 0.75 }]}
                 >
-                  <Text style={styles.blockBtnText}>Ya pagué el depósito</Text>
+                  {paying ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <Feather name="credit-card" size={16} color="#fff" />
+                      <Text style={styles.blockBtnText}>
+                        Pagar {formatMoney(blockFee)} con Mercado Pago
+                      </Text>
+                    </>
+                  )}
                 </Pressable>
+                {payMessage ? (
+                  <Text
+                    style={[
+                      styles.payMessage,
+                      {
+                        color:
+                          payMessage.tone === 'ok'
+                            ? '#138a68'
+                            : payMessage.tone === 'error'
+                              ? '#d64545'
+                              : colors.mutedForeground,
+                      },
+                    ]}
+                  >
+                    {payMessage.text}
+                  </Text>
+                ) : null}
+                {payMessage?.tone === 'info' ? (
+                  <Pressable onPress={() => void verifyDeposit()} disabled={paying} hitSlop={8}>
+                    <Text style={[styles.verifyLink, { color: colors.primary }]}>Ya pagué, verificar</Text>
+                  </Pressable>
+                ) : null}
                 <Text style={[styles.blockHint, { color: colors.mutedForeground }]}>
                   Docs {docsComplete ? 'subidos' : 'pendientes'} · revisión{' '}
                   {docsApproved ? 'aprobada' : 'pendiente (puedes operar al cubrir el bloque)'}
@@ -799,6 +885,15 @@ const styles = StyleSheet.create({
   blockTrack: { backgroundColor: '#e8efe9', borderRadius: 100, height: 8, overflow: 'hidden' },
   blockFill: { backgroundColor: '#d88d2e', height: '100%' },
   blockBtn: { alignItems: 'center', borderRadius: 12, marginTop: 4, paddingVertical: 12 },
+  mpBtn: {
+    backgroundColor: '#009ee3',
+    flexDirection: 'row',
+    gap: 8,
+    justifyContent: 'center',
+    minHeight: 46,
+  },
+  payMessage: { fontFamily: 'Inter_500Medium', fontSize: 12, lineHeight: 17 },
+  verifyLink: { fontFamily: 'Inter_700Bold', fontSize: 13 },
   blockBtnText: { color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 13 },
   blockHint: { fontFamily: 'Inter_500Medium', fontSize: 11 },
   hero: { borderRadius: 24, gap: 6, overflow: 'hidden', padding: 20 },

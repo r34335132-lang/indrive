@@ -127,6 +127,22 @@ export type Driver = Profile & {
   lastTripAt: string | null;
 };
 
+export type DepositStatus = 'none' | 'pending' | 'approved' | 'rejected' | 'refunded' | 'cancelled';
+
+export type DriverDeposit = {
+  id: string;
+  driver_id: string;
+  amount: number;
+  currency: string;
+  status: DepositStatus;
+  mp_preference_id: string | null;
+  mp_payment_id: string | null;
+  mp_status_detail: string | null;
+  paid_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type Passenger = Profile & {
   trips: number;
   spent: number;

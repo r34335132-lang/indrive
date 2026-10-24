@@ -62,7 +62,7 @@ Deno.serve(async (req) => {
       return new Response('payment fetch failed', { status: 502, headers: cors });
     }
 
-    const rideId = String(payment.external_reference || payment.metadata?.ride_id || '');
+    const externalRef = String(payment.external_reference || '');
     const statusRaw = String(payment.status || '');
     const mapped =
       statusRaw === 'approved'
@@ -76,6 +76,19 @@ Deno.serve(async (req) => {
             : 'pending';
 
     const admin = createClient(supabaseUrl, serviceKey);
+
+    const depositId = externalRef.startsWith('deposit:')
+      ? externalRef.slice('deposit:'.length)
+      : payment.metadata?.kind === 'driver_deposit'
+        ? String(payment.metadata?.deposit_id || '')
+        : '';
+
+    if (depositId) {
+      await handleDeposit(admin, depositId, payment, mapped);
+      return new Response('ok', { status: 200, headers: cors });
+    }
+
+    const rideId = externalRef || String(payment.metadata?.ride_id || '');
 
     if (rideId) {
       const ridePatch: Record<string, unknown> = {
@@ -129,3 +142,39 @@ Deno.serve(async (req) => {
     return new Response('error', { status: 500, headers: cors });
   }
 });
+
+// deno-lint-ignore no-explicit-any
+async function handleDeposit(admin: any, depositId: string, payment: any, mapped: string) {
+  const { data: deposit } = await admin
+    .from('driver_deposits')
+    .select('id, driver_id, amount, status')
+    .eq('id', depositId)
+    .maybeSingle();
+  if (!deposit) {
+    console.error('Depósito no encontrado', depositId);
+    return;
+  }
+
+  const paidEnough = Number(payment.transaction_amount) + 0.01 >= Number(deposit.amount);
+  const status = mapped === 'approved' && !paidEnough ? 'rejected' : mapped;
+  // MP puede reenviar notificaciones viejas fuera de orden.
+  if (deposit.status === 'approved' && status !== 'refunded') return;
+
+  await admin
+    .from('driver_deposits')
+    .update({
+      status,
+      mp_payment_id: String(payment.id),
+      mp_status_detail: payment.status_detail ?? null,
+      raw: payment,
+      paid_at: status === 'approved' ? new Date().toISOString() : null,
+    })
+    .eq('id', deposit.id);
+
+  if (status === 'approved') {
+    await admin
+      .from('profiles')
+      .update({ block_fee_satisfied: true, block_fee_satisfied_at: new Date().toISOString() })
+      .eq('id', deposit.driver_id);
+  }
+}

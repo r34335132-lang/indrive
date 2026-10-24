@@ -15,6 +15,7 @@ import {
   type RegisterPassengerInput,
 } from '@/lib/api/auth';
 import { deleteMyAccount } from '@/lib/api/account';
+import { startDepositPayment } from '@/lib/api/payments';
 import {
   markBlockFeeSatisfied,
   uploadDriverDocument,
@@ -46,6 +47,8 @@ type AuthContextValue = {
   uploadPhoto: (source: 'camera' | 'library') => Promise<void>;
   setAllDocumentsUploaded: () => Promise<void>;
   satisfyBlockFee: () => Promise<void>;
+  /** true si Mercado Pago ya confirmó el depósito. */
+  payBlockFee: () => Promise<boolean>;
   refreshProfile: () => Promise<void>;
 };
 
@@ -177,13 +180,29 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const satisfyBlockFee = useCallback(async () => {
     if (!profile) return;
     await markBlockFeeSatisfied(profile.id);
-    setProfile({ ...profile, blockFeeSatisfied: true });
+    const fresh = await fetchProfile(profile.id);
+    if (fresh) setProfile(fresh);
   }, [profile]);
 
   const refreshProfile = useCallback(async () => {
     if (!session?.user) return;
     await loadUserData(session.user.id);
   }, [loadUserData, session?.user]);
+
+  /** Paga el depósito con Mercado Pago y espera la confirmación del webhook (hasta ~30 s). */
+  const payBlockFee = useCallback(async (): Promise<boolean> => {
+    if (!profile) return false;
+    const { alreadyPaid } = await startDepositPayment();
+    for (let i = 0; i < (alreadyPaid ? 1 : 10); i += 1) {
+      const fresh = await fetchProfile(profile.id);
+      if (fresh?.blockFeeSatisfied) {
+        setProfile(fresh);
+        return true;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 3000));
+    }
+    return false;
+  }, [profile]);
 
   const docsComplete = Boolean(driverDocs.complete);
   const docsApproved = driverDocs.reviewStatus === 'approved';
@@ -212,6 +231,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       uploadPhoto,
       setAllDocumentsUploaded,
       satisfyBlockFee,
+      payBlockFee,
       refreshProfile,
     }),
     [
@@ -233,6 +253,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       uploadPhoto,
       setAllDocumentsUploaded,
       satisfyBlockFee,
+      payBlockFee,
       refreshProfile,
     ],
   );

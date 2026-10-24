@@ -5,6 +5,7 @@ import { useAuth } from './lib/auth';
 import { AdminDataProvider } from './lib/data';
 import { useHashRoute } from './lib/useHashRoute';
 import { Applications } from './pages/Applications';
+import { Deposits } from './pages/Deposits';
 import { Drivers } from './pages/Drivers';
 import { Login } from './pages/Login';
 import { Overview } from './pages/Overview';
@@ -41,6 +42,7 @@ export default function App() {
         {route === 'applications' ? <Applications /> : null}
         {route === 'drivers' ? <Drivers /> : null}
         {route === 'trips' ? <Trips /> : null}
+        {route === 'deposits' ? <Deposits /> : null}
         {route === 'passengers' ? <Passengers /> : null}
         {route === 'tariffs' ? <Tariffs /> : null}
       </Shell>
