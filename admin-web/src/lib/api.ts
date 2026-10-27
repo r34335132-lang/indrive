@@ -1,5 +1,17 @@
 import { supabase } from './supabase';
-import type { DriverDeposit, DriverDocsRow, Profile, ReviewStatus, Ride, Tariff } from './types';
+import type {
+  DailyBlock,
+  DailyBlockStatus,
+  DriverDeposit,
+  DriverDocsRow,
+  DriverPayout,
+  PayoutAccount,
+  PayoutBalance,
+  Profile,
+  ReviewStatus,
+  Ride,
+  Tariff,
+} from './types';
 
 export async function fetchProfiles(): Promise<Profile[]> {
   const { data, error } = await supabase
@@ -40,9 +52,7 @@ export async function fetchRides(limit = 2000): Promise<Ride[]> {
 export async function fetchDeposits(): Promise<DriverDeposit[]> {
   const { data, error } = await supabase
     .from('driver_deposits')
-    .select(
-      'id, driver_id, amount, currency, status, mp_preference_id, mp_payment_id, mp_status_detail, paid_at, created_at, updated_at',
-    )
+    .select('*')
     .order('created_at', { ascending: false })
     .limit(2000);
   if (error) {
@@ -50,6 +60,96 @@ export async function fetchDeposits(): Promise<DriverDeposit[]> {
     return [];
   }
   return ((data ?? []) as DriverDeposit[]).map((d) => ({ ...d, amount: Number(d.amount) || 0 }));
+}
+
+/** Vacío si la migración 018 aún no se ha corrido. */
+export async function fetchDailyBlocks(): Promise<DailyBlock[]> {
+  const { data, error } = await supabase
+    .from('driver_daily_blocks')
+    .select('id, driver_id, day, amount, earned, status, method, deposit_id, note, paid_at, created_at')
+    .order('day', { ascending: false })
+    .limit(3000);
+  if (error) {
+    console.warn('driver_daily_blocks', error.message);
+    return [];
+  }
+  return ((data ?? []) as DailyBlock[]).map((b) => ({
+    ...b,
+    amount: Number(b.amount) || 0,
+    earned: Number(b.earned) || 0,
+  }));
+}
+
+/** Efectivo en oficina (`paid`), condonar (`waived`) o deshacer (`pending`). */
+export async function resolveDailyBlock(id: string, status: DailyBlockStatus, note?: string) {
+  const { data: auth } = await supabase.auth.getUser();
+  const patch =
+    status === 'pending'
+      ? { status, method: null, paid_at: null, resolved_by: null, note: null }
+      : {
+          status,
+          method: status === 'paid' ? 'admin' : null,
+          paid_at: new Date().toISOString(),
+          resolved_by: auth.user?.id ?? null,
+          note: note?.trim() || null,
+        };
+  const { error } = await supabase.from('driver_daily_blocks').update(patch).eq('id', id);
+  if (error) throw error;
+}
+
+export type PayoutData = {
+  accounts: PayoutAccount[];
+  balances: PayoutBalance[];
+  payouts: DriverPayout[];
+};
+
+/** Vacío si la migración 017 aún no se ha corrido. */
+export async function fetchPayoutData(): Promise<PayoutData> {
+  const [acc, bal, pay] = await Promise.all([
+    supabase.from('driver_payout_accounts').select('driver_id, holder_name, bank_name, clabe, updated_at'),
+    supabase.rpc('admin_payout_balances'),
+    supabase
+      .from('driver_payouts')
+      .select('*')
+      .order('created_at', { ascending: false })
+      .limit(1000),
+  ]);
+  for (const r of [acc, bal, pay]) if (r.error) console.warn('payouts', r.error.message);
+  return {
+    accounts: (acc.data ?? []) as PayoutAccount[],
+    balances: ((bal.data ?? []) as PayoutBalance[]).map((b) => ({
+      ...b,
+      card_earned: Number(b.card_earned) || 0,
+      card_trips: Number(b.card_trips) || 0,
+      paid_out: Number(b.paid_out) || 0,
+      balance: Number(b.balance) || 0,
+    })),
+    payouts: ((pay.data ?? []) as DriverPayout[]).map((p) => ({ ...p, amount: Number(p.amount) || 0 })),
+  };
+}
+
+export async function createPayout(input: {
+  driverId: string;
+  amount: number;
+  clabe: string | null;
+  reference?: string;
+  note?: string;
+}) {
+  const { data: auth } = await supabase.auth.getUser();
+  const { error } = await supabase.from('driver_payouts').insert({
+    driver_id: input.driverId,
+    amount: Math.round(input.amount * 100) / 100,
+    clabe: input.clabe,
+    reference: input.reference?.trim() || null,
+    note: input.note?.trim() || null,
+    created_by: auth.user?.id ?? null,
+  });
+  if (error) throw error;
+}
+
+export async function deletePayout(id: string) {
+  const { error } = await supabase.from('driver_payouts').delete().eq('id', id);
+  if (error) throw error;
 }
 
 export async function fetchActiveTariff(): Promise<Tariff | null> {
@@ -78,17 +178,6 @@ export async function reviewDriver(userId: string, status: ReviewStatus, note?: 
     .from('driver_documents')
     .update({ review_status: status, review_note: note?.trim() || null })
     .eq('user_id', userId);
-  if (error) throw error;
-}
-
-export async function setBlockFee(userId: string, satisfied: boolean) {
-  const { error } = await supabase
-    .from('profiles')
-    .update({
-      block_fee_satisfied: satisfied,
-      block_fee_satisfied_at: satisfied ? new Date().toISOString() : null,
-    })
-    .eq('id', userId);
   if (error) throw error;
 }
 

@@ -1,4 +1,4 @@
-import { Banknote, CheckCircle2, Clock3, Download, ShieldAlert, Wallet } from 'lucide-react';
+import { Ban, Banknote, CheckCircle2, Clock3, Download, ShieldAlert, Undo2, Wallet } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useMemo, useState } from 'react';
 import {
@@ -14,36 +14,40 @@ import {
   Segmented,
   Skeleton,
 } from '../components/ui';
-import { fetchActiveTariff, setBlockFee } from '../lib/api';
+import { fetchActiveTariff, resolveDailyBlock } from '../lib/api';
 import { useAdminData } from '../lib/data';
-import { formatDateTime, formatMoney, timeAgo, type Tone } from '../lib/format';
-import type { DepositStatus, Driver, DriverDeposit } from '../lib/types';
+import { formatDateTime, formatDay, formatMoney, timeAgo, todayMx, type Tone } from '../lib/format';
+import type { DailyBlock, DailyBlockStatus, Driver, DriverDeposit } from '../lib/types';
 
-const DEPOSIT_STATUS: Record<DepositStatus, { label: string; tone: Tone }> = {
-  approved: { label: 'Aprobado', tone: 'green' },
-  pending: { label: 'Pendiente', tone: 'amber' },
-  rejected: { label: 'Rechazado', tone: 'rose' },
-  cancelled: { label: 'Cancelado', tone: 'slate' },
-  refunded: { label: 'Reembolsado', tone: 'violet' },
-  none: { label: 'Sin pago', tone: 'slate' },
+const METHOD_LABEL: Record<string, string> = {
+  mercadopago: 'Mercado Pago',
+  balance: 'Saldo de tarjeta',
+  admin: 'Efectivo (oficina)',
 };
 
-type Filter = 'all' | 'approved' | 'pending' | 'failed';
+type Filter = 'all' | 'pending' | 'paid' | 'waived';
 
-type Row = DriverDeposit & { driver: Driver | undefined };
+type Row = DailyBlock & { driver: Driver | undefined; deposit: DriverDeposit | undefined; overdue: boolean };
+
+function statusOf(r: Row): { label: string; tone: Tone } {
+  if (r.status === 'paid') return { label: 'Pagado', tone: 'green' };
+  if (r.status === 'waived') return { label: 'Condonado', tone: 'slate' };
+  return r.overdue ? { label: 'Vencido', tone: 'rose' } : { label: 'Pendiente hoy', tone: 'amber' };
+}
 
 function exportCsv(rows: Row[]) {
-  const header = ['Fecha', 'Conductor', 'Email', 'Monto', 'Estado', 'Pago MP', 'Detalle', 'Pagado'];
+  const header = ['Día', 'Conductor', 'Email', 'Ganó ese día', 'Bloque', 'Estado', 'Método', 'Pago MP', 'Pagado'];
   const esc = (v: unknown) => `"${String(v ?? '').replace(/"/g, '""')}"`;
   const lines = rows.map((r) =>
     [
-      r.created_at,
+      r.day,
       r.driver?.name ?? r.driver_id,
       r.driver?.email ?? '',
+      r.earned,
       r.amount,
-      DEPOSIT_STATUS[r.status]?.label ?? r.status,
-      r.mp_payment_id ?? '',
-      r.mp_status_detail ?? '',
+      statusOf(r).label,
+      r.method ? METHOD_LABEL[r.method] : '',
+      r.deposit?.mp_payment_id ?? '',
       r.paid_at ?? '',
     ]
       .map(esc)
@@ -52,13 +56,13 @@ function exportCsv(rows: Row[]) {
   const blob = new Blob([`\ufeff${header.join(',')}\n${lines.join('\n')}`], { type: 'text/csv;charset=utf-8' });
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
-  a.download = `depositos-inridee-${new Date().toISOString().slice(0, 10)}.csv`;
+  a.download = `bloques-inridee-${new Date().toISOString().slice(0, 10)}.csv`;
   a.click();
   URL.revokeObjectURL(a.href);
 }
 
 export function Deposits() {
-  const { deposits, drivers, loading, refresh } = useAdminData();
+  const { dailyBlocks, deposits, drivers, loading, refresh } = useAdminData();
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [fee, setFee] = useState(300);
@@ -80,41 +84,50 @@ export function Deposits() {
   }, [toast]);
 
   const driversById = useMemo(() => new Map(drivers.map((d) => [d.id, d])), [drivers]);
+  const depositsById = useMemo(() => new Map(deposits.map((d) => [d.id, d])), [deposits]);
+  const today = todayMx();
 
   const rows = useMemo<Row[]>(
-    () => deposits.map((d) => ({ ...d, driver: driversById.get(d.driver_id) })),
-    [deposits, driversById],
+    () =>
+      dailyBlocks.map((b) => ({
+        ...b,
+        driver: driversById.get(b.driver_id),
+        deposit: b.deposit_id ? depositsById.get(b.deposit_id) : undefined,
+        overdue: b.status === 'pending' && b.day < today,
+      })),
+    [dailyBlocks, depositsById, driversById, today],
   );
 
   const stats = useMemo(() => {
-    const approved = rows.filter((r) => r.status === 'approved');
+    const paid = rows.filter((r) => r.status === 'paid');
     const monthStart = new Date();
     monthStart.setDate(1);
     monthStart.setHours(0, 0, 0, 0);
     return {
-      collected: approved.reduce((s, r) => s + r.amount, 0),
-      approvedCount: approved.length,
-      month: approved
+      collected: paid.reduce((s, r) => s + r.amount, 0),
+      paidCount: paid.length,
+      month: paid
         .filter((r) => new Date(r.paid_at ?? r.created_at) >= monthStart)
         .reduce((s, r) => s + r.amount, 0),
-      pending: rows.filter((r) => r.status === 'pending' && r.mp_payment_id).length,
+      pendingToday: rows.filter((r) => r.status === 'pending' && !r.overdue).length,
+      blockedDrivers: new Set(rows.filter((r) => r.overdue).map((r) => r.driver_id)).size,
     };
   }, [rows]);
 
   const owing = useMemo(
     () =>
-      drivers
-        .filter((d) => d.docs?.review_status === 'approved' && !d.block_fee_satisfied && d.earnings < fee)
-        .sort((a, b) => b.earnings - a.earnings),
-    [drivers, fee],
+      rows
+        .filter((r) => r.status === 'pending')
+        .sort((a, b) => Number(b.overdue) - Number(a.overdue) || a.day.localeCompare(b.day)),
+    [rows],
   );
 
   const counts = useMemo(
     () => ({
       all: rows.length,
-      approved: rows.filter((r) => r.status === 'approved').length,
       pending: rows.filter((r) => r.status === 'pending').length,
-      failed: rows.filter((r) => ['rejected', 'cancelled', 'refunded'].includes(r.status)).length,
+      paid: rows.filter((r) => r.status === 'paid').length,
+      waived: rows.filter((r) => r.status === 'waived').length,
     }),
     [rows],
   );
@@ -122,23 +135,31 @@ export function Deposits() {
   const list = useMemo(() => {
     const q = query.trim().toLowerCase();
     return rows.filter((r) => {
-      if (filter === 'approved' && r.status !== 'approved') return false;
-      if (filter === 'pending' && r.status !== 'pending') return false;
-      if (filter === 'failed' && !['rejected', 'cancelled', 'refunded'].includes(r.status)) return false;
+      if (filter !== 'all' && r.status !== filter) return false;
       if (!q) return true;
-      return [r.driver?.name, r.driver?.email, r.driver?.phone, r.mp_payment_id]
+      return [r.driver?.name, r.driver?.email, r.driver?.phone, r.deposit?.mp_payment_id, r.day]
         .filter(Boolean)
         .some((v) => String(v).toLowerCase().includes(q));
     });
   }, [filter, query, rows]);
 
-  const markCash = async (d: Driver) => {
-    if (!window.confirm(`¿Marcar el depósito de ${d.name} como pagado en efectivo?`)) return;
-    setBusyId(d.id);
+  const resolve = async (r: Row, status: DailyBlockStatus) => {
+    const name = r.driver?.name ?? 'el conductor';
+    const day = formatDay(r.day);
+    const question =
+      status === 'paid'
+        ? `¿Registrar que ${name} pagó en efectivo el bloque del ${day} (${formatMoney(r.amount)})?`
+        : status === 'waived'
+          ? `¿Condonar el bloque del ${day} de ${name}? No se le cobrará.`
+          : `¿Regresar a pendiente el bloque del ${day} de ${name}?`;
+    if (!window.confirm(question)) return;
+    setBusyId(r.id);
     try {
-      await setBlockFee(d.id, true);
+      await resolveDailyBlock(r.id, status);
       await refresh();
-      setToast(`${d.name} ya puede recibir viajes`);
+      setToast(
+        status === 'paid' ? 'Bloque marcado como pagado' : status === 'waived' ? 'Bloque condonado' : 'Bloque pendiente otra vez',
+      );
     } catch (e) {
       setToast(e instanceof Error ? e.message : 'No se pudo actualizar');
     } finally {
@@ -150,11 +171,11 @@ export function Deposits() {
     <div>
       <PageHeader
         eyebrow="Finanzas"
-        title="Depósitos"
-        subtitle={`Bloque de sistema de ${formatMoney(fee)} pagado por los conductores con Mercado Pago`}
+        title="Bloques de sistema"
+        subtitle={`Bloque diario de ${formatMoney(fee)}: se genera el día que el conductor junta ese monto en ganancias`}
         actions={
           <>
-            <SearchInput value={query} onChange={setQuery} placeholder="Conductor o ID de pago…" />
+            <SearchInput value={query} onChange={setQuery} placeholder="Conductor, fecha o ID de pago…" />
             <motion.button
               whileTap={{ scale: 0.96 }}
               onClick={() => exportCsv(list)}
@@ -173,7 +194,7 @@ export function Deposits() {
           label="Total cobrado"
           value={stats.collected}
           format={formatMoney}
-          sub={`${stats.approvedCount} depósitos aprobados`}
+          sub={`${stats.paidCount} bloques pagados`}
           accent
           delay={0}
         />
@@ -187,16 +208,16 @@ export function Deposits() {
         />
         <Stat
           icon={<Clock3 size={19} />}
-          label="En proceso"
-          value={stats.pending}
-          sub="Pagos esperando confirmación (OXXO, etc.)"
+          label="Pendientes de hoy"
+          value={stats.pendingToday}
+          sub="Ya juntaron el bloque; tienen hasta las 11:59 pm"
           delay={0.1}
         />
         <Stat
           icon={<ShieldAlert size={19} />}
-          label="Sin depósito"
-          value={owing.length}
-          sub="Conductores aprobados que no pueden trabajar"
+          label="Conductores bloqueados"
+          value={stats.blockedDrivers}
+          sub="Con bloques vencidos: no pueden aceptar viajes"
           delay={0.15}
         />
       </div>
@@ -205,14 +226,14 @@ export function Deposits() {
         <div>
           <div className="mb-4">
             <Segmented
-              id="deposits"
+              id="blocks"
               value={filter}
               onChange={setFilter}
               options={[
                 { value: 'all', label: 'Todos', count: counts.all },
-                { value: 'approved', label: 'Aprobados', count: counts.approved },
                 { value: 'pending', label: 'Pendientes', count: counts.pending },
-                { value: 'failed', label: 'Fallidos', count: counts.failed },
+                { value: 'paid', label: 'Pagados', count: counts.paid },
+                { value: 'waived', label: 'Condonados', count: counts.waived },
               ]}
             />
           </div>
@@ -225,19 +246,20 @@ export function Deposits() {
               </div>
             ) : list.length ? (
               <div className="scroll-thin overflow-x-auto">
-                <table className="w-full min-w-[760px] text-sm">
+                <table className="w-full min-w-[820px] text-sm">
                   <thead>
                     <tr className="border-b border-line text-left text-xs font-semibold tracking-wide text-muted uppercase">
                       <th className="px-6 py-4">Conductor</th>
-                      <th className="px-4 py-4 text-right">Monto</th>
+                      <th className="px-4 py-4">Día</th>
+                      <th className="px-4 py-4 text-right">Bloque</th>
                       <th className="px-4 py-4">Estado</th>
-                      <th className="px-4 py-4">Pago Mercado Pago</th>
-                      <th className="px-6 py-4 text-right">Fecha</th>
+                      <th className="px-4 py-4">Cómo pagó</th>
+                      <th className="px-6 py-4" />
                     </tr>
                   </thead>
                   <tbody>
                     {list.slice(0, 300).map((r, i) => {
-                      const st = DEPOSIT_STATUS[r.status] ?? DEPOSIT_STATUS.none;
+                      const st = statusOf(r);
                       const name = r.driver?.name ?? 'Conductor eliminado';
                       return (
                         <motion.tr
@@ -252,31 +274,48 @@ export function Deposits() {
                               <Avatar name={name} src={r.driver?.avatar_url} size={36} />
                               <div className="min-w-0">
                                 <p className="truncate font-semibold">{name}</p>
-                                <p className="truncate text-xs text-muted">{r.driver?.email ?? r.driver_id}</p>
+                                <p className="truncate text-xs text-muted">{r.driver?.phone || r.driver?.email}</p>
                               </div>
                             </div>
+                          </td>
+                          <td className="px-4 py-3.5">
+                            <p className="font-medium capitalize">{formatDay(r.day)}</p>
+                            <p className="text-xs text-muted">Ganó {formatMoney(r.earned)}</p>
                           </td>
                           <td className="px-4 py-3.5 text-right font-bold">{formatMoney(r.amount)}</td>
                           <td className="px-4 py-3.5">
                             <Badge tone={st.tone} dot>
-                              {r.status === 'pending' && !r.mp_payment_id ? 'Checkout abierto' : st.label}
+                              {st.label}
                             </Badge>
                           </td>
                           <td className="px-4 py-3.5">
-                            {r.mp_payment_id ? (
+                            {r.method ? (
                               <div>
-                                <p className="font-mono text-xs font-semibold text-ink">#{r.mp_payment_id}</p>
-                                {r.mp_status_detail ? (
-                                  <p className="text-xs text-muted">{r.mp_status_detail}</p>
-                                ) : null}
+                                <p className="font-medium">{METHOD_LABEL[r.method]}</p>
+                                <p className="text-xs text-muted">
+                                  {r.deposit?.mp_payment_id ? `#${r.deposit.mp_payment_id} · ` : ''}
+                                  {r.paid_at ? timeAgo(r.paid_at) : ''}
+                                </p>
                               </div>
+                            ) : r.status === 'waived' ? (
+                              <span className="text-xs text-muted">{r.paid_at ? formatDateTime(r.paid_at) : '—'}</span>
                             ) : (
                               <span className="text-muted">—</span>
                             )}
                           </td>
                           <td className="px-6 py-3.5 text-right">
-                            <p className="font-medium">{formatDateTime(r.paid_at ?? r.created_at)}</p>
-                            <p className="text-xs text-muted">{timeAgo(r.paid_at ?? r.created_at)}</p>
+                            {r.status === 'pending' ? (
+                              <BlockActions busy={busyId === r.id} onResolve={(s) => void resolve(r, s)} />
+                            ) : r.method !== 'mercadopago' && r.method !== 'balance' ? (
+                              <button
+                                onClick={() => void resolve(r, 'pending')}
+                                disabled={busyId === r.id}
+                                className="rounded-lg p-1.5 text-muted transition hover:bg-slate-100 hover:text-ink"
+                                title="Regresar a pendiente"
+                              >
+                                <Undo2 size={15} />
+                              </button>
+                            ) : null}
                           </td>
                         </motion.tr>
                       );
@@ -292,11 +331,11 @@ export function Deposits() {
             ) : (
               <EmptyState
                 icon={<Wallet size={24} />}
-                title={rows.length ? 'Sin resultados' : 'Aún no hay depósitos'}
+                title={rows.length ? 'Sin resultados' : 'Aún no hay bloques'}
                 text={
                   rows.length
                     ? 'Prueba con otro filtro o búsqueda.'
-                    : 'Cuando un conductor pague su depósito con Mercado Pago desde la app aparecerá aquí.'
+                    : `Cuando un conductor junte ${formatMoney(fee)} en un día se generará su bloque aquí.`
                 }
               />
             )}
@@ -305,46 +344,30 @@ export function Deposits() {
 
         <Card className="h-fit pb-2" delay={0.1}>
           <CardHeader
-            title="Pendientes de depósito"
-            subtitle="Aprobados que aún no cubren el bloque"
+            title="Por cobrar"
+            subtitle="Vencidos primero; los de hoy vencen a las 11:59 pm"
             action={<Badge tone={owing.length ? 'amber' : 'green'}>{owing.length}</Badge>}
           />
           <div className="scroll-thin mt-4 max-h-[560px] space-y-1 overflow-y-auto px-3">
             {loading ? (
               Array.from({ length: 4 }, (_, i) => <Skeleton key={i} className="mx-3 h-14" />)
             ) : owing.length ? (
-              owing.map((d) => {
-                const pct = Math.min(100, Math.round((d.earnings / fee) * 100));
+              owing.map((r) => {
+                const name = r.driver?.name ?? 'Conductor eliminado';
                 return (
-                  <div key={d.id} className="rounded-2xl px-3 py-3 transition hover:bg-canvas">
+                  <div key={r.id} className="rounded-2xl px-3 py-3 transition hover:bg-canvas">
                     <div className="flex items-center gap-3">
-                      <Avatar name={d.name} src={d.avatar_url} size={34} />
+                      <Avatar name={name} src={r.driver?.avatar_url} size={34} />
                       <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-semibold">{d.name}</p>
-                        <p className="truncate text-xs text-muted">{d.phone || d.email}</p>
+                        <p className="truncate text-sm font-semibold">{name}</p>
+                        <p className="truncate text-xs text-muted capitalize">
+                          {formatDay(r.day)} · {formatMoney(r.amount)}
+                        </p>
                       </div>
-                      <motion.button
-                        whileTap={{ scale: 0.95 }}
-                        disabled={busyId === d.id}
-                        onClick={() => void markCash(d)}
-                        className="rounded-xl bg-teal-500/10 px-3 py-1.5 text-xs font-bold text-teal-700 transition hover:bg-teal-500/20 disabled:opacity-50"
-                        title="Marcar como pagado en efectivo"
-                      >
-                        {busyId === d.id ? '…' : 'Efectivo'}
-                      </motion.button>
+                      <Badge tone={r.overdue ? 'rose' : 'amber'}>{r.overdue ? 'Vencido' : 'Hoy'}</Badge>
                     </div>
-                    <div className="mt-2 flex items-center gap-2">
-                      <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-slate-100">
-                        <motion.div
-                          className="h-full rounded-full bg-gradient-to-r from-teal-400 to-teal-600"
-                          initial={{ width: 0 }}
-                          animate={{ width: `${pct}%` }}
-                          transition={{ duration: 0.8, ease: [0.16, 1, 0.3, 1] }}
-                        />
-                      </div>
-                      <span className="w-24 text-right text-[11px] font-semibold text-muted">
-                        {formatMoney(d.earnings)} / {formatMoney(fee)}
-                      </span>
+                    <div className="mt-2 flex justify-end">
+                      <BlockActions busy={busyId === r.id} onResolve={(s) => void resolve(r, s)} />
                     </div>
                   </div>
                 );
@@ -353,7 +376,7 @@ export function Deposits() {
               <EmptyState
                 icon={<CheckCircle2 size={24} />}
                 title="Todo al corriente"
-                text="Todos los conductores aprobados ya cubrieron su depósito."
+                text="Ningún conductor debe bloques."
               />
             )}
           </div>
@@ -372,6 +395,37 @@ export function Deposits() {
           </motion.div>
         ) : null}
       </AnimatePresence>
+    </div>
+  );
+}
+
+export function BlockActions({
+  busy,
+  onResolve,
+}: {
+  busy: boolean;
+  onResolve: (status: DailyBlockStatus) => void;
+}) {
+  return (
+    <div className="flex items-center justify-end gap-1.5">
+      <motion.button
+        whileTap={{ scale: 0.95 }}
+        disabled={busy}
+        onClick={() => onResolve('paid')}
+        className="rounded-xl bg-teal-500/10 px-3 py-1.5 text-xs font-bold text-teal-700 transition hover:bg-teal-500/20 disabled:opacity-50"
+        title="Pagó en efectivo en la oficina"
+      >
+        {busy ? '…' : 'Efectivo'}
+      </motion.button>
+      <motion.button
+        whileTap={{ scale: 0.95 }}
+        disabled={busy}
+        onClick={() => onResolve('waived')}
+        className="flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-500 transition hover:bg-slate-100 disabled:opacity-50"
+        title="No cobrar este bloque"
+      >
+        <Ban size={13} /> Condonar
+      </motion.button>
     </div>
   );
 }

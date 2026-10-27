@@ -42,10 +42,10 @@ export async function startCardPayment(rideId: string): Promise<CreatePaymentRes
 }
 
 /**
- * Abre Checkout Pro para pagar el depósito del conductor (bloque de sistema).
- * El webhook marca el depósito como cubierto cuando Mercado Pago aprueba el pago.
+ * Abre Checkout Pro para pagar un bloque de sistema diario.
+ * El webhook marca el bloque como pagado cuando Mercado Pago aprueba el pago.
  */
-export async function startDepositPayment(): Promise<{ alreadyPaid: boolean }> {
+export async function startDepositPayment(blockId?: string): Promise<{ alreadyPaid: boolean }> {
   const { data: sessionData, error: sessionError } = await supabase.auth.getSession();
   if (sessionError || !sessionData.session?.access_token) {
     throw new Error('Inicia sesión para pagar');
@@ -60,7 +60,7 @@ export async function startDepositPayment(): Promise<{ alreadyPaid: boolean }> {
       apikey: process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '',
       'Content-Type': 'application/json',
     },
-    body: '{}',
+    body: JSON.stringify(blockId ? { blockId } : {}),
   });
   const json = (await res.json().catch(() => ({}))) as {
     initPoint?: string;

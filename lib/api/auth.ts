@@ -41,6 +41,37 @@ export async function switchActiveRole(userId: string, role: UserRole): Promise<
   return mapProfile(data);
 }
 
+export type VehicleInput = {
+  make: string;
+  model: string;
+  color: string;
+  plate: string;
+};
+
+export async function updateVehicle(userId: string, input: VehicleInput): Promise<Profile> {
+  const make = input.make.trim();
+  const model = input.model.trim();
+  const color = input.color.trim();
+  const plate = input.plate.trim().toUpperCase().replace(/\s+/g, '');
+  if (!make || !model || !color) throw new Error('Completa marca, modelo y color');
+  if (!/^[A-Z0-9-]{5,10}$/.test(plate)) throw new Error('Revisa las placas (5 a 10 letras/números)');
+
+  const { data, error } = await supabase
+    .from('profiles')
+    .update({
+      vehicle_make: make,
+      vehicle_model: model,
+      vehicle_color: color,
+      vehicle_plate: plate,
+      bio: `${make} ${model} · ${plate}`,
+    })
+    .eq('id', userId)
+    .select('*')
+    .single();
+  if (error) throw error;
+  return mapProfile(data);
+}
+
 export async function updateDriverDoc(
   userId: string,
   patch: Partial<Record<'ineFront' | 'ineBack' | 'license' | 'circulation' | 'insurance', boolean>>,

@@ -145,11 +145,29 @@ export async function updateRideStatus(rideId: string, status: RideStatus): Prom
 
   const { data, error } = await supabase.from('rides').update(patch).eq('id', rideId).select('*').single();
   if (error) throw error;
-  return mapRide(data);
+  const ride = mapRide(data);
+  if (ride.status !== status) {
+    throw new Error(
+      ride.status === 'completed' || ride.status === 'cancelled'
+        ? 'Este viaje ya terminó'
+        : 'No se pudo actualizar el viaje',
+    );
+  }
+  return ride;
 }
 
 export async function cancelRide(rideId: string): Promise<Ride> {
   return updateRideStatus(rideId, 'cancelled');
+}
+
+/** Pasajero califica al conductor (1-5). El servidor recalcula el promedio del conductor. */
+export async function rateRide(rideId: string, stars: number, comment?: string): Promise<void> {
+  const { error } = await supabase.rpc('rate_ride', {
+    p_ride_id: rideId,
+    p_stars: Math.round(stars),
+    p_comment: comment?.trim() || null,
+  });
+  if (error) throw new Error(error.message || 'No se pudo enviar la calificación');
 }
 
 export async function updateRideFare(

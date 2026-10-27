@@ -31,6 +31,17 @@ export function formatDateTime(iso: string | null | undefined) {
   });
 }
 
+const mxDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Monterrey' });
+
+/** Hoy en La Laguna / Durango como `YYYY-MM-DD` (mismo criterio que `inride_today()` en la BD). */
+export const todayMx = () => mxDay.format(new Date());
+
+/** `2026-10-27` → `mar 27 oct` */
+export function formatDay(day: string) {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(y, m - 1, d).toLocaleDateString('es-MX', { weekday: 'short', day: 'numeric', month: 'short' });
+}
+
 export function timeAgo(iso: string | null | undefined) {
   if (!iso) return '—';
   const diff = (Date.now() - new Date(iso).getTime()) / 1000;

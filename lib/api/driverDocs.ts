@@ -150,17 +150,6 @@ export async function setDriverDocsReviewStatus(
   return mapDocs(data);
 }
 
-export async function markBlockFeeSatisfied(userId: string): Promise<void> {
-  const { error } = await supabase
-    .from('profiles')
-    .update({
-      block_fee_satisfied: true,
-      block_fee_satisfied_at: new Date().toISOString(),
-    })
-    .eq('id', userId);
-  if (error) throw error;
-}
-
 export type PendingDriverReview = {
   userId: string;
   name: string;

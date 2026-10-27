@@ -3,7 +3,7 @@ export default {
     name: 'inride',
     slug: 'inride',
     owner: 'raulbri123',
-    version: '1.0.8',
+    version: '1.0.11',
     orientation: 'portrait',
     icon: './assets/images/icon.png',
     scheme: 'inride',

@@ -192,8 +192,9 @@ export default function AdminScreen() {
 
     const statusData = [
       { label: 'Completado', value: trips.filter((t) => t.status === 'Completado').length },
-      { label: 'Confirmado', value: trips.filter((t) => t.status === 'Confirmado').length },
+      { label: 'Buscando', value: trips.filter((t) => t.status === 'Buscando').length },
       { label: 'En camino', value: trips.filter((t) => t.status === 'En camino').length },
+      { label: 'Cancelado', value: trips.filter((t) => t.status === 'Cancelado').length },
     ];
 
     const ratingData = [5, 4, 3, 2, 1].map((stars) => ({

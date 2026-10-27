@@ -125,6 +125,9 @@ export type Driver = Profile & {
   completedTrips: number;
   earnings: number;
   lastTripAt: string | null;
+  blockToday: DailyBlock | null;
+  /** Bloques de días anteriores sin pagar: el conductor no puede aceptar viajes. */
+  blocksOverdue: DailyBlock[];
 };
 
 export type DepositStatus = 'none' | 'pending' | 'approved' | 'rejected' | 'refunded' | 'cancelled';
@@ -139,8 +142,53 @@ export type DriverDeposit = {
   mp_payment_id: string | null;
   mp_status_detail: string | null;
   paid_at: string | null;
+  block_id?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type DailyBlockStatus = 'pending' | 'paid' | 'waived';
+
+export type DailyBlock = {
+  id: string;
+  driver_id: string;
+  day: string;
+  amount: number;
+  earned: number;
+  status: DailyBlockStatus;
+  method: 'mercadopago' | 'balance' | 'admin' | null;
+  deposit_id: string | null;
+  note: string | null;
+  paid_at: string | null;
+  created_at: string;
+};
+
+export type PayoutAccount = {
+  driver_id: string;
+  holder_name: string;
+  bank_name: string;
+  clabe: string;
+  updated_at: string;
+};
+
+export type PayoutBalance = {
+  driver_id: string;
+  card_earned: number;
+  card_trips: number;
+  paid_out: number;
+  balance: number;
+  last_payout_at: string | null;
+};
+
+export type DriverPayout = {
+  id: string;
+  driver_id: string;
+  kind?: 'transfer' | 'block_fee';
+  amount: number;
+  clabe: string | null;
+  reference: string | null;
+  note: string | null;
+  created_at: string;
 };
 
 export type Passenger = Profile & {

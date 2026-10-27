@@ -11,16 +11,13 @@ import {
   setAllDriverDocsUploaded,
   switchActiveRole,
   updateDriverDoc,
+  updateVehicle as updateVehicleApi,
   type RegisterDriverInput,
   type RegisterPassengerInput,
+  type VehicleInput,
 } from '@/lib/api/auth';
 import { deleteMyAccount } from '@/lib/api/account';
-import { startDepositPayment } from '@/lib/api/payments';
-import {
-  markBlockFeeSatisfied,
-  uploadDriverDocument,
-  uploadProfilePhoto,
-} from '@/lib/api/driverDocs';
+import { uploadDriverDocument, uploadProfilePhoto } from '@/lib/api/driverDocs';
 import { isSupabaseConfigured, supabase } from '@/lib/supabase';
 import type { DriverDocs, DriverDocumentKey, Profile, UserRole } from '@/types';
 
@@ -35,7 +32,6 @@ type AuthContextValue = {
   driverDocs: DriverDocs;
   docsComplete: boolean;
   docsApproved: boolean;
-  blockFeeSatisfied: boolean;
   login: (email: string, password: string) => Promise<void>;
   registerAsPassenger: (input: RegisterPassengerInput) => Promise<void>;
   registerAsDriver: (input: RegisterDriverInput) => Promise<void>;
@@ -45,10 +41,8 @@ type AuthContextValue = {
   toggleDocument: (key: DriverDocumentKey) => Promise<void>;
   uploadDocument: (key: DriverDocumentKey) => Promise<void>;
   uploadPhoto: (source: 'camera' | 'library') => Promise<void>;
+  updateVehicle: (input: VehicleInput) => Promise<void>;
   setAllDocumentsUploaded: () => Promise<void>;
-  satisfyBlockFee: () => Promise<void>;
-  /** true si Mercado Pago ya confirmó el depósito. */
-  payBlockFee: () => Promise<boolean>;
   refreshProfile: () => Promise<void>;
 };
 
@@ -171,17 +165,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     [profile],
   );
 
+  const updateVehicle = useCallback(
+    async (input: VehicleInput) => {
+      if (!profile) return;
+      setProfile(await updateVehicleApi(profile.id, input));
+    },
+    [profile],
+  );
+
   const setAllDocumentsUploaded = useCallback(async () => {
     if (!profile) return;
     const next = await setAllDriverDocsUploaded(profile.id);
     setDriverDocs(next);
-  }, [profile]);
-
-  const satisfyBlockFee = useCallback(async () => {
-    if (!profile) return;
-    await markBlockFeeSatisfied(profile.id);
-    const fresh = await fetchProfile(profile.id);
-    if (fresh) setProfile(fresh);
   }, [profile]);
 
   const refreshProfile = useCallback(async () => {
@@ -189,24 +184,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     await loadUserData(session.user.id);
   }, [loadUserData, session?.user]);
 
-  /** Paga el depósito con Mercado Pago y espera la confirmación del webhook (hasta ~30 s). */
-  const payBlockFee = useCallback(async (): Promise<boolean> => {
-    if (!profile) return false;
-    const { alreadyPaid } = await startDepositPayment();
-    for (let i = 0; i < (alreadyPaid ? 1 : 10); i += 1) {
-      const fresh = await fetchProfile(profile.id);
-      if (fresh?.blockFeeSatisfied) {
-        setProfile(fresh);
-        return true;
-      }
-      await new Promise((resolve) => setTimeout(resolve, 3000));
-    }
-    return false;
-  }, [profile]);
-
   const docsComplete = Boolean(driverDocs.complete);
   const docsApproved = driverDocs.reviewStatus === 'approved';
-  const blockFeeSatisfied = Boolean(profile?.blockFeeSatisfied);
 
   const value = useMemo(
     () => ({
@@ -219,7 +198,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       driverDocs,
       docsComplete,
       docsApproved,
-      blockFeeSatisfied,
       login,
       registerAsPassenger,
       registerAsDriver,
@@ -229,9 +207,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       toggleDocument,
       uploadDocument,
       uploadPhoto,
+      updateVehicle,
       setAllDocumentsUploaded,
-      satisfyBlockFee,
-      payBlockFee,
       refreshProfile,
     }),
     [
@@ -241,7 +218,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       driverDocs,
       docsComplete,
       docsApproved,
-      blockFeeSatisfied,
       login,
       registerAsPassenger,
       registerAsDriver,
@@ -251,9 +227,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       toggleDocument,
       uploadDocument,
       uploadPhoto,
+      updateVehicle,
       setAllDocumentsUploaded,
-      satisfyBlockFee,
-      payBlockFee,
       refreshProfile,
     ],
   );

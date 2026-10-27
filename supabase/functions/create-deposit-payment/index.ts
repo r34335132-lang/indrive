@@ -1,4 +1,5 @@
-// Crea preferencia Checkout Pro para el depósito del conductor (bloque de sistema).
+// Crea preferencia Checkout Pro para pagar el bloque de sistema diario del conductor.
+// Body opcional: { blockId } — si no viene, cobra el bloque pendiente más antiguo.
 // Secrets: MERCADOPAGO_ACCESS_TOKEN, SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY
 import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.49.1';
 
@@ -36,35 +37,40 @@ Deno.serve(async (req) => {
     const admin = createClient(supabaseUrl, serviceKey);
     const { data: profile } = await admin
       .from('profiles')
-      .select('id, roles, block_fee_satisfied, email')
+      .select('id, roles, email')
       .eq('id', user.id)
       .single();
     if (!profile || !(profile.roles as string[]).includes('driver')) {
-      return json({ error: 'Solo conductores pueden pagar el depósito' }, 403);
-    }
-    if (profile.block_fee_satisfied) {
-      return json({ alreadyPaid: true });
+      return json({ error: 'Solo conductores pueden pagar el bloque' }, 403);
     }
 
-    const { data: tariff } = await admin
-      .from('tariffs')
-      .select('system_block_fee')
-      .eq('active', true)
-      .maybeSingle();
-    const amount = Math.round((Number(tariff?.system_block_fee) || 300) * 100) / 100;
+    const body = (await req.json().catch(() => ({}))) as { blockId?: string };
+    let blockQuery = admin
+      .from('driver_daily_blocks')
+      .select('id, day, amount, status')
+      .eq('driver_id', user.id);
+    blockQuery = body.blockId
+      ? blockQuery.eq('id', body.blockId)
+      : blockQuery.eq('status', 'pending').order('day', { ascending: true }).limit(1);
+    const { data: block } = await blockQuery.maybeSingle();
+    if (!block || block.status !== 'pending') {
+      return json({ alreadyPaid: true });
+    }
+    const amount = Math.round(Number(block.amount) * 100) / 100;
+    const dayLabel = String(block.day).split('-').reverse().join('/');
 
     const { data: deposit, error: depError } = await admin
       .from('driver_deposits')
-      .insert({ driver_id: user.id, amount, currency: 'MXN', status: 'pending' })
+      .insert({ driver_id: user.id, amount, currency: 'MXN', status: 'pending', block_id: block.id })
       .select('id')
       .single();
-    if (depError || !deposit) return json({ error: 'No se pudo registrar el depósito' }, 500);
+    if (depError || !deposit) return json({ error: 'No se pudo registrar el pago' }, 500);
 
     const preference = {
       items: [
         {
           id: `deposit-${deposit.id}`,
-          title: 'Depósito de conductor inride (bloque de sistema)',
+          title: `Bloque de sistema inride · ${dayLabel}`,
           quantity: 1,
           currency_id: 'MXN',
           unit_price: amount,
@@ -75,7 +81,7 @@ Deno.serve(async (req) => {
       notification_url: `${supabaseUrl}/functions/v1/mercadopago-webhook`,
       statement_descriptor: 'INRIDE',
       binary_mode: true,
-      metadata: { kind: 'driver_deposit', deposit_id: deposit.id, driver_id: user.id },
+      metadata: { kind: 'driver_deposit', deposit_id: deposit.id, driver_id: user.id, block_id: block.id },
       back_urls: {
         success: 'inride://payment/deposit',
         failure: 'inride://payment/deposit',
@@ -103,6 +109,7 @@ Deno.serve(async (req) => {
 
     return json({
       depositId: deposit.id,
+      blockId: block.id,
       preferenceId: mpData.id,
       initPoint: mpData.init_point || mpData.sandbox_init_point,
       amount,

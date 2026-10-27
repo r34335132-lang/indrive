@@ -1,4 +1,5 @@
-import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
+import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { AppState } from 'react-native';
 import { rideToTrip } from '@/lib/api/mappers';
 import {
   acceptRide,
@@ -7,6 +8,8 @@ import {
   fetchActiveRideForUser,
   fetchMyRides,
   fetchOpenRides,
+  fetchRide,
+  rateRide as rateRideApi,
   closeRealtimeChannel,
   subscribeRideById,
   subscribeRides,
@@ -52,7 +55,13 @@ export type ActiveRide = {
   driverId: string | null;
   paymentMethod: import('@/types').PaymentMethod;
   paymentStatus: import('@/types').PaymentStatus;
+  rating: number | null;
 };
+
+/** Un "searching" más viejo que esto se considera abandonado. */
+const STALE_SEARCH_MS = 30 * 60 * 1000;
+/** Un viaje en curso sin ningún cambio en este tiempo quedó colgado (no se cerró bien). */
+const STALE_ACTIVE_MS = 4 * 60 * 60 * 1000;
 
 type BookingState = {
   origin: string;
@@ -84,6 +93,10 @@ type BookingContextValue = {
   allTrips: Trip[];
   openRides: Ride[];
   activeRide: ActiveRide | null;
+  /** Último viaje que terminó estando abierto en la app (para el resumen / calificación). */
+  completedRide: ActiveRide | null;
+  dismissCompletedRide: () => void;
+  rateRide: (rideId: string, stars: number, comment?: string) => Promise<void>;
   updateBooking: (values: Partial<BookingState>) => void;
   resetBooking: () => void;
   requestRide: (input?: MapRideRequest) => Promise<ActiveRide>;
@@ -147,7 +160,12 @@ function toActiveRide(ride: Ride): ActiveRide {
     driverId: ride.driverId,
     paymentMethod: ride.paymentMethod ?? 'cash',
     paymentStatus: ride.paymentStatus ?? 'none',
+    rating: ride.rating ?? null,
   };
+}
+
+function isEnded(status: RideStatus) {
+  return status === 'completed' || status === 'cancelled';
 }
 
 export function BookingProvider({ children }: { children: React.ReactNode }) {
@@ -158,6 +176,25 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
   const [allTrips, setAllTrips] = useState<Trip[]>([]);
   const [openRides, setOpenRides] = useState<Ride[]>([]);
   const [activeRide, setActiveRide] = useState<ActiveRide | null>(null);
+  const [completedRide, setCompletedRide] = useState<ActiveRide | null>(null);
+  /** Viajes que ya terminaron en esta sesión: ninguna respuesta tardía los puede revivir. */
+  const endedIds = useRef(new Set<string>());
+
+  /** Saca el viaje de "activo"; si se completó, lo deja para el resumen y la calificación. */
+  const endRide = useCallback((ride: Ride) => {
+    endedIds.current.add(ride.id);
+    if (ride.status === 'completed') setCompletedRide(toActiveRide(ride));
+    setActiveRide((current) => (current && current.id !== ride.id ? current : null));
+  }, []);
+
+  /** Pone un viaje como activo solo si sigue vivo. */
+  const showLive = useCallback((ride: Ride) => {
+    if (isEnded(ride.status) || endedIds.current.has(ride.id)) {
+      setActiveRide((current) => (current?.id === ride.id ? null : current));
+      return;
+    }
+    setActiveRide(toActiveRide(ride));
+  }, []);
 
   const refreshTrips = useCallback(async () => {
     if (!profile || !isSupabaseConfigured) return;
@@ -191,16 +228,72 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     }
     try {
       const ride = await fetchActiveRideForUser(profile.id);
-      setActiveRide(ride ? toActiveRide(ride) : null);
+      if (!ride) {
+        setActiveRide(null);
+        return;
+      }
+      const searching = ride.status === 'searching' || ride.status === 'offered';
+      if (searching && Date.now() - new Date(ride.createdAt).getTime() > STALE_SEARCH_MS) {
+        if (ride.passengerId === profile.id) void cancelRide(ride.id).catch(() => {});
+        setActiveRide(null);
+        return;
+      }
+      if (
+        !searching &&
+        Date.now() - new Date(ride.updatedAt || ride.createdAt).getTime() > STALE_ACTIVE_MS
+      ) {
+        endedIds.current.add(ride.id);
+        setActiveRide(null);
+        return;
+      }
+      showLive(ride);
     } catch {
-      setActiveRide(null);
+      // conservar el estado actual si falla la red
     }
-  }, [profile]);
+  }, [profile, showLive]);
 
   useEffect(() => {
     refreshTrips();
     refreshActive();
   }, [refreshActive, refreshTrips]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state !== 'active') return;
+      void refreshActive();
+      void refreshTrips();
+    });
+    return () => sub.remove();
+  }, [refreshActive, refreshTrips]);
+
+  // Respaldo del tiempo real: si se pierde el evento, el viaje igual se cierra.
+  useEffect(() => {
+    if (!activeRide?.id || !isSupabaseConfigured) return;
+    const id = activeRide.id;
+    const timer = setInterval(() => {
+      fetchRide(id)
+        .then((ride) => {
+          if (!ride) return;
+          if (isEnded(ride.status)) {
+            endRide(ride);
+            void refreshTrips();
+            return;
+          }
+          if (endedIds.current.has(ride.id)) return;
+          setActiveRide((current) =>
+            current &&
+            current.id === ride.id &&
+            (current.status !== ride.status ||
+              current.price !== ride.price ||
+              current.driverId !== ride.driverId)
+              ? toActiveRide(ride)
+              : current,
+          );
+        })
+        .catch(() => {});
+    }, 5000);
+    return () => clearInterval(timer);
+  }, [activeRide?.id, endRide, refreshTrips]);
 
   // Realtime: open searching rides for drivers + active ride updates
   useEffect(() => {
@@ -217,14 +310,15 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       if (next.status !== 'searching') {
         setOpenRides((current) => current.filter((r) => r.id !== next.id));
       }
-      if (
-        next.passengerId === profile.id ||
-        next.driverId === profile.id ||
-        (activeRide && next.id === activeRide.id)
+      if (activeRide && next.id === activeRide.id) {
+        if (isEnded(next.status)) endRide(next);
+        else showLive(next);
+      } else if (
+        !isEnded(next.status) &&
+        next.status !== 'searching' &&
+        (next.passengerId === profile.id || next.driverId === profile.id)
       ) {
-        const live =
-          next.status === 'completed' || next.status === 'cancelled' ? null : toActiveRide(next);
-        setActiveRide(live);
+        showLive(next);
       }
       refreshTrips();
     });
@@ -232,22 +326,22 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
     return () => {
       closeRealtimeChannel(channel);
     };
-  }, [activeRide, profile, refreshTrips, role]);
+  }, [activeRide, endRide, profile, refreshTrips, role, showLive]);
 
   useEffect(() => {
     if (!activeRide?.id || !isSupabaseConfigured) return;
     const channel = subscribeRideById(activeRide.id, (ride) => {
-      if (ride.status === 'completed' || ride.status === 'cancelled') {
-        setActiveRide(null);
+      if (isEnded(ride.status)) {
+        endRide(ride);
         refreshTrips();
         return;
       }
-      setActiveRide(toActiveRide(ride));
+      showLive(ride);
     });
     return () => {
       closeRealtimeChannel(channel);
     };
-  }, [activeRide?.id, refreshTrips]);
+  }, [activeRide?.id, endRide, refreshTrips, showLive]);
 
   const updateBooking = (values: Partial<BookingState>) => {
     setBooking((current) => {
@@ -346,10 +440,37 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
 
   const completeRide = useCallback(async () => {
     if (!activeRide) return;
-    await updateRideStatus(activeRide.id, 'completed');
-    setActiveRide(null);
+    let ride: Ride | null = null;
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3 && !ride; attempt += 1) {
+      try {
+        ride = await updateRideStatus(activeRide.id, 'completed');
+      } catch (error) {
+        lastError = error;
+        const current = await fetchRide(activeRide.id).catch(() => null);
+        if (current?.status === 'completed') ride = current;
+        else if (attempt < 2) await new Promise((resolve) => setTimeout(resolve, 1200));
+      }
+    }
+    if (!ride) {
+      throw lastError instanceof Error ? lastError : new Error('No se pudo finalizar el viaje');
+    }
+    endRide(ride);
     await refreshTrips();
-  }, [activeRide, refreshTrips]);
+  }, [activeRide, endRide, refreshTrips]);
+
+  const dismissCompletedRide = useCallback(() => setCompletedRide(null), []);
+
+  const rateRide = useCallback(
+    async (rideId: string, stars: number, comment?: string) => {
+      await rateRideApi(rideId, stars, comment);
+      setCompletedRide((current) =>
+        current && current.id === rideId ? { ...current, rating: stars } : current,
+      );
+      await refreshTrips();
+    },
+    [refreshTrips],
+  );
 
   const clearActiveRide = useCallback(async () => {
     if (activeRide && (activeRide.status === 'searching' || activeRide.status === 'offered')) {
@@ -402,6 +523,9 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       allTrips,
       openRides,
       activeRide,
+      completedRide,
+      dismissCompletedRide,
+      rateRide,
       updateBooking,
       resetBooking,
       requestRide,
@@ -422,6 +546,9 @@ export function BookingProvider({ children }: { children: React.ReactNode }) {
       allTrips,
       openRides,
       activeRide,
+      completedRide,
+      dismissCompletedRide,
+      rateRide,
       requestRide,
       acceptRideAsDriver,
       markEnRoutePickup,

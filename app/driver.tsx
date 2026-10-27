@@ -18,7 +18,10 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { AppLogo } from '@/components/AppLogo';
 import { RideNotice } from '@/components/RideNotice';
 import { RideChatButton } from '@/components/RideChatSheet';
+import { DailyBlockCard, useDailyBlocks } from '@/components/DailyBlockCard';
+import { DriverPayoutsCard } from '@/components/DriverPayoutsCard';
 import { DriverPhotoCard } from '@/components/DriverPhotoCard';
+import { VehicleEditorModal } from '@/components/VehicleEditorModal';
 import { SideMenu } from '@/components/SideMenu';
 import { LegalLinks } from '@/components/LegalLinks';
 import { TripCard } from '@/components/TripCard';
@@ -58,9 +61,7 @@ export default function DriverScreen() {
     deleteAccount,
     docsComplete,
     docsApproved,
-    blockFeeSatisfied,
-    satisfyBlockFee,
-    payBlockFee,
+    driverDocs,
     refreshProfile,
     isReady,
     role,
@@ -77,11 +78,9 @@ export default function DriverScreen() {
   const [skippedIds, setSkippedIds] = useState<string[]>([]);
   const [showDelete, setShowDelete] = useState(false);
   const [showPhoto, setShowPhoto] = useState(false);
-  const [paying, setPaying] = useState(false);
-  const [payMessage, setPayMessage] = useState<{ tone: 'ok' | 'info' | 'error'; text: string } | null>(
-    null,
-  );
-  const autoFeeTried = useRef(false);
+  const [showVehicle, setShowVehicle] = useState(false);
+  const [payoutEditRequest, setPayoutEditRequest] = useState(0);
+  const [checkingReview, setCheckingReview] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const notifiedId = useRef<string | null>(null);
 
@@ -117,13 +116,11 @@ export default function DriverScreen() {
     return { today, week, todayTrips, weekTrips };
   }, [completed]);
 
-  const lifetimeEarnings = useMemo(
-    () => completed.reduce((sum, trip) => sum + Number(trip.driverNet || 0), 0),
-    [completed],
-  );
   const blockFee = Number(tariff.systemBlockFee) || 300;
-  const canWork = blockFeeSatisfied || lifetimeEarnings >= blockFee;
-  const blockProgress = Math.min(1, lifetimeEarnings / Math.max(blockFee, 1));
+  const dailyBlocks = useDailyBlocks(docsApproved ? user?.id : undefined, earnings.today);
+  const blockOverdue = dailyBlocks.overdue.length > 0;
+  const canWork = docsApproved && !blockOverdue;
+  const reviewStatus = driverDocs.reviewStatus ?? 'pending';
 
   const availableRides = useMemo(
     () => (online && canWork ? openRides.filter((ride) => !skippedIds.includes(ride.id)) : []),
@@ -137,49 +134,23 @@ export default function DriverScreen() {
       : null;
 
   useEffect(() => {
-    if (!blockFeeSatisfied && lifetimeEarnings >= blockFee && !autoFeeTried.current) {
-      autoFeeTried.current = true;
-      void satisfyBlockFee().catch(() => {});
-    }
-  }, [blockFeeSatisfied, lifetimeEarnings, blockFee, satisfyBlockFee]);
+    if (!canWork && online) setOnline(false);
+  }, [canWork, online]);
 
-  const payDeposit = async () => {
-    if (paying) return;
-    setPayMessage(null);
-    setPaying(true);
-    try {
-      const confirmed = await payBlockFee();
-      if (confirmed) {
-        void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
-        setPayMessage({ tone: 'ok', text: '¡Depósito confirmado! Ya puedes recibir viajes.' });
-      } else {
-        setPayMessage({
-          tone: 'info',
-          text: 'Si completaste el pago, Mercado Pago lo confirmará en unos minutos. Toca "Ya pagué, verificar".',
-        });
-      }
-    } catch (e) {
-      setPayMessage({
-        tone: 'error',
-        text: e instanceof Error ? e.message : 'No se pudo abrir Mercado Pago',
-      });
-    } finally {
-      setPaying(false);
-    }
-  };
+  useEffect(() => {
+    if (!docsComplete || docsApproved) return;
+    const timer = setInterval(() => void refreshProfile().catch(() => {}), 20000);
+    return () => clearInterval(timer);
+  }, [docsApproved, docsComplete, refreshProfile]);
 
-  const verifyDeposit = async () => {
-    setPaying(true);
+  const checkReview = async () => {
+    setCheckingReview(true);
     try {
       await refreshProfile();
     } finally {
-      setPaying(false);
+      setCheckingReview(false);
     }
   };
-
-  useEffect(() => {
-    if (!canWork && online) setOnline(false);
-  }, [canWork, online]);
 
   const avgRating =
     completed.reduce((sum, t) => sum + (t.rating ?? 0), 0) /
@@ -339,63 +310,74 @@ export default function DriverScreen() {
 
         {tab === 'home' ? (
           <>
-            {showPhoto || !user?.avatarUrl ? <DriverPhotoCard compact /> : null}
-            {!canWork ? (
-              <View style={[styles.blockCard, { backgroundColor: colors.card, borderColor: '#d88d2e' }]}>
-                <Text style={[styles.blockTitle, { color: colors.foreground }]}>
-                  Bloque de sistema · {formatMoney(blockFee)}
-                </Text>
-                <Text style={[styles.blockCopy, { color: colors.mutedForeground }]}>
-                  Para recibir viajes paga el depósito con Mercado Pago (tarjeta, OXXO o saldo) o
-                  alcánzalo con tus ganancias. Llevas {formatMoney(lifetimeEarnings)} de{' '}
-                  {formatMoney(blockFee)}.
-                </Text>
-                <View style={styles.blockTrack}>
-                  <View style={[styles.blockFill, { width: `${Math.round(blockProgress * 100)}%` }]} />
-                </View>
-                <Pressable
-                  onPress={() => void payDeposit()}
-                  disabled={paying}
-                  style={[styles.blockBtn, styles.mpBtn, paying && { opacity: 0.75 }]}
+            {!docsApproved ? (
+              <View
+                style={[
+                  styles.reviewCard,
+                  reviewStatus === 'rejected' ? styles.reviewCardRejected : null,
+                ]}
+              >
+                <View
+                  style={[
+                    styles.reviewIcon,
+                    { backgroundColor: reviewStatus === 'rejected' ? '#fdecec' : '#fff3db' },
+                  ]}
                 >
-                  {paying ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <>
-                      <Feather name="credit-card" size={16} color="#fff" />
-                      <Text style={styles.blockBtnText}>
-                        Pagar {formatMoney(blockFee)} con Mercado Pago
-                      </Text>
-                    </>
-                  )}
-                </Pressable>
-                {payMessage ? (
-                  <Text
-                    style={[
-                      styles.payMessage,
-                      {
-                        color:
-                          payMessage.tone === 'ok'
-                            ? '#138a68'
-                            : payMessage.tone === 'error'
-                              ? '#d64545'
-                              : colors.mutedForeground,
-                      },
-                    ]}
-                  >
-                    {payMessage.text}
-                  </Text>
-                ) : null}
-                {payMessage?.tone === 'info' ? (
-                  <Pressable onPress={() => void verifyDeposit()} disabled={paying} hitSlop={8}>
-                    <Text style={[styles.verifyLink, { color: colors.primary }]}>Ya pagué, verificar</Text>
-                  </Pressable>
-                ) : null}
-                <Text style={[styles.blockHint, { color: colors.mutedForeground }]}>
-                  Docs {docsComplete ? 'subidos' : 'pendientes'} · revisión{' '}
-                  {docsApproved ? 'aprobada' : 'pendiente (puedes operar al cubrir el bloque)'}
+                  <Feather
+                    name={reviewStatus === 'rejected' ? 'alert-circle' : 'clock'}
+                    size={26}
+                    color={reviewStatus === 'rejected' ? '#c24141' : '#c27a12'}
+                  />
+                </View>
+                <Text style={styles.reviewTitle}>
+                  {reviewStatus === 'rejected' ? 'Documentación rechazada' : 'Documentación en revisión'}
                 </Text>
+                <Text style={styles.reviewCopy}>
+                  {reviewStatus === 'rejected'
+                    ? 'Hay un problema con alguno de tus documentos. Corrígelo y lo volvemos a revisar.'
+                    : 'Nuestro equipo está verificando tus documentos. Te habilitaremos para recibir viajes en cuanto sean aprobados (normalmente menos de 24 h).'}
+                </Text>
+                {reviewStatus === 'rejected' && driverDocs.reviewNote ? (
+                  <View style={styles.reviewNote}>
+                    <Text style={styles.reviewNoteLabel}>Motivo</Text>
+                    <Text style={styles.reviewNoteText}>{driverDocs.reviewNote}</Text>
+                  </View>
+                ) : null}
+                <View style={styles.reviewSteps}>
+                  <ReviewStep done label="Cuenta creada" />
+                  <ReviewStep done={docsComplete} label="Documentos enviados" />
+                  <ReviewStep
+                    done={false}
+                    active={reviewStatus !== 'rejected'}
+                    label={reviewStatus === 'rejected' ? 'Corrección pendiente' : 'Revisión del equipo inride'}
+                  />
+                </View>
+                {reviewStatus === 'rejected' ? (
+                  <Pressable
+                    onPress={() => router.push('/register-driver')}
+                    style={[styles.blockBtn, styles.reviewBtn]}
+                  >
+                    <Text style={styles.blockBtnText}>Corregir documentos</Text>
+                  </Pressable>
+                ) : (
+                  <Pressable
+                    onPress={() => void checkReview()}
+                    disabled={checkingReview}
+                    style={[styles.blockBtn, styles.reviewBtnGhost]}
+                  >
+                    {checkingReview ? (
+                      <ActivityIndicator color={colors.primary} />
+                    ) : (
+                      <Text style={[styles.blockBtnText, { color: colors.primary }]}>Actualizar estado</Text>
+                    )}
+                  </Pressable>
+                )}
               </View>
+            ) : null}
+            {showPhoto || !user?.avatarUrl ? <DriverPhotoCard compact /> : null}
+            {docsApproved ? <DriverPayoutsCard variant="nudge" /> : null}
+            {docsApproved ? (
+              <DailyBlockCard state={dailyBlocks} fee={blockFee} todayEarnings={earnings.today} />
             ) : null}
             <LinearGradient colors={['#0f241f', '#16362f', '#138a68']} style={styles.hero}>
               <Text style={styles.heroEyebrow}>HOY · INRIDE CONDUCTOR</Text>
@@ -411,12 +393,13 @@ export default function DriverScreen() {
                     {(user?.rating ?? avgRating ?? 5).toFixed(2)}
                   </Text>
                 </View>
-                <View style={styles.heroChip}>
+                <Pressable style={styles.heroChip} onPress={() => setShowVehicle(true)} hitSlop={6}>
                   <Feather name="truck" size={13} color="#c5edda" />
                   <Text style={styles.heroChipText} numberOfLines={1}>
                     {vehicleLabel}
                   </Text>
-                </View>
+                  <Feather name="edit-2" size={11} color="#c5edda" />
+                </Pressable>
               </View>
             </LinearGradient>
 
@@ -516,7 +499,11 @@ export default function DriverScreen() {
                 <Text style={[styles.alertSubtitle, { color: colors.mutedForeground }]}>
                   {online
                     ? 'Cuando un pasajero pida un viaje cerca, te avisamos aquí con navegación al pickup.'
-                    : 'Activa “En línea” para recibir solicitudes.'}
+                    : !docsApproved
+                      ? 'Podrás recibir solicitudes cuando aprueben tu documentación.'
+                      : blockOverdue
+                        ? 'Paga tu bloque pendiente para volver a recibir solicitudes.'
+                        : 'Activa “En línea” para recibir solicitudes.'}
                 </Text>
               </View>
             )}
@@ -576,9 +563,11 @@ export default function DriverScreen() {
               <Text style={styles.earnEyebrow}>GANANCIAS DE LA SEMANA</Text>
               <Text style={styles.earnMoney}>${earnings.week.toFixed(2)}</Text>
               <Text style={styles.earnSub}>
-                {earnings.weekTrips} viajes · bloque {formatMoney(tariff.systemBlockFee)} por viaje
+                {earnings.weekTrips} viajes · bloque {formatMoney(blockFee)} por día
               </Text>
             </LinearGradient>
+
+            <DriverPayoutsCard editRequest={payoutEditRequest} />
 
             <View style={[styles.earnCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
               <Text style={[styles.earnRowLabel, { color: colors.mutedForeground }]}>Hoy</Text>
@@ -743,6 +732,21 @@ export default function DriverScreen() {
             },
           },
           {
+            key: 'vehicle',
+            label: 'Mi vehículo',
+            icon: 'truck',
+            onPress: () => setShowVehicle(true),
+          },
+          {
+            key: 'payout',
+            label: 'Cuenta para depósitos',
+            icon: 'credit-card',
+            onPress: () => {
+              setTab('earnings');
+              setPayoutEditRequest((n) => n + 1);
+            },
+          },
+          {
             key: 'earnings',
             label: 'Ganancias',
             icon: 'dollar-sign',
@@ -775,6 +779,15 @@ export default function DriverScreen() {
         ]}
       />
 
+      <VehicleEditorModal
+        visible={showVehicle}
+        onClose={() => setShowVehicle(false)}
+        onUpdateDocs={() => {
+          setShowVehicle(false);
+          router.push('/register-driver');
+        }}
+      />
+
       <RideNotice
         visible={showDelete}
         tone="warning"
@@ -799,6 +812,22 @@ export default function DriverScreen() {
         }}
       />
     </SafeAreaView>
+  );
+}
+
+function ReviewStep({ done, active, label }: { done: boolean; active?: boolean; label: string }) {
+  return (
+    <View style={styles.reviewStep}>
+      <View
+        style={[
+          styles.reviewDot,
+          done ? styles.reviewDotDone : active ? styles.reviewDotActive : null,
+        ]}
+      >
+        {done ? <Feather name="check" size={11} color="#fff" /> : null}
+      </View>
+      <Text style={[styles.reviewStepText, (done || active) && { color: '#10221c' }]}>{label}</Text>
+    </View>
   );
 }
 
@@ -879,23 +908,65 @@ const styles = StyleSheet.create({
   tabOn: { backgroundColor: '#138a68' },
   tabText: { color: '#16362f', fontFamily: 'Inter_600SemiBold', fontSize: 12 },
   tabTextOn: { color: '#fff' },
-  blockCard: { borderRadius: 18, borderWidth: 1.5, gap: 8, padding: 16 },
-  blockTitle: { fontFamily: 'Inter_700Bold', fontSize: 15 },
-  blockCopy: { fontFamily: 'Inter_400Regular', fontSize: 12, lineHeight: 17 },
-  blockTrack: { backgroundColor: '#e8efe9', borderRadius: 100, height: 8, overflow: 'hidden' },
-  blockFill: { backgroundColor: '#d88d2e', height: '100%' },
   blockBtn: { alignItems: 'center', borderRadius: 12, marginTop: 4, paddingVertical: 12 },
-  mpBtn: {
-    backgroundColor: '#009ee3',
-    flexDirection: 'row',
-    gap: 8,
+  reviewCard: {
+    alignItems: 'center',
+    backgroundColor: '#fffaf0',
+    borderColor: '#f1d9a8',
+    borderRadius: 22,
+    borderWidth: 1.5,
+    gap: 10,
+    padding: 18,
+  },
+  reviewCardRejected: { backgroundColor: '#fff6f6', borderColor: '#f2c4c4' },
+  reviewIcon: {
+    alignItems: 'center',
+    borderRadius: 30,
+    height: 56,
     justifyContent: 'center',
+    width: 56,
+  },
+  reviewTitle: { color: '#10221c', fontFamily: 'Inter_700Bold', fontSize: 18, textAlign: 'center' },
+  reviewCopy: {
+    color: '#5c6b64',
+    fontFamily: 'Inter_500Medium',
+    fontSize: 13,
+    lineHeight: 19,
+    textAlign: 'center',
+  },
+  reviewNote: {
+    alignSelf: 'stretch',
+    backgroundColor: '#ffffff',
+    borderColor: '#f2c4c4',
+    borderRadius: 14,
+    borderWidth: 1,
+    gap: 2,
+    padding: 12,
+  },
+  reviewNoteLabel: { color: '#c24141', fontFamily: 'Inter_700Bold', fontSize: 11 },
+  reviewNoteText: { color: '#10221c', fontFamily: 'Inter_500Medium', fontSize: 13 },
+  reviewSteps: { alignSelf: 'stretch', gap: 8, marginTop: 4 },
+  reviewStep: { alignItems: 'center', flexDirection: 'row', gap: 10 },
+  reviewDot: {
+    alignItems: 'center',
+    backgroundColor: '#e6ece9',
+    borderRadius: 10,
+    height: 20,
+    justifyContent: 'center',
+    width: 20,
+  },
+  reviewDotDone: { backgroundColor: '#138a68' },
+  reviewDotActive: { backgroundColor: '#f2b544' },
+  reviewStepText: { color: '#8a9790', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  reviewBtn: { alignSelf: 'stretch', backgroundColor: '#c24141' },
+  reviewBtnGhost: {
+    alignSelf: 'stretch',
+    backgroundColor: '#ffffff',
+    borderColor: '#cfe3da',
+    borderWidth: 1,
     minHeight: 46,
   },
-  payMessage: { fontFamily: 'Inter_500Medium', fontSize: 12, lineHeight: 17 },
-  verifyLink: { fontFamily: 'Inter_700Bold', fontSize: 13 },
   blockBtnText: { color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 13 },
-  blockHint: { fontFamily: 'Inter_500Medium', fontSize: 11 },
   hero: { borderRadius: 24, gap: 6, overflow: 'hidden', padding: 20 },
   heroEyebrow: {
     color: '#8fd9bc',

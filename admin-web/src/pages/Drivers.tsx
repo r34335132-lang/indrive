@@ -1,4 +1,4 @@
-import { Car, ShieldCheck, ShieldOff } from 'lucide-react';
+import { Car, Clock3, ShieldCheck, ShieldOff } from 'lucide-react';
 import { motion } from 'motion/react';
 import { useMemo, useState } from 'react';
 import { DriverDrawer } from '../components/DriverDrawer';
@@ -68,7 +68,7 @@ export function Drivers() {
                   <th className="px-6 py-4">Conductor</th>
                   <th className="px-4 py-4">Vehículo</th>
                   <th className="px-4 py-4">Estado</th>
-                  <th className="px-4 py-4">Depósito</th>
+                  <th className="px-4 py-4">Bloque</th>
                   <th className="px-4 py-4 text-right">Viajes</th>
                   <th className="px-4 py-4 text-right">Ganancias</th>
                   <th className="px-6 py-4 text-right">Último viaje</th>
@@ -110,14 +110,20 @@ export function Drivers() {
                         </Badge>
                       </td>
                       <td className="px-4 py-3.5">
-                        {d.block_fee_satisfied ? (
+                        {d.blocksOverdue.length ? (
+                          <span className="flex items-center gap-1.5 font-medium text-rose-600">
+                            <ShieldOff size={15} /> Vencido ({d.blocksOverdue.length})
+                          </span>
+                        ) : d.blockToday?.status === 'pending' ? (
+                          <span className="flex items-center gap-1.5 font-medium text-amber-600">
+                            <Clock3 size={15} /> Pendiente hoy
+                          </span>
+                        ) : d.blockToday ? (
                           <span className="flex items-center gap-1.5 font-medium text-emerald-600">
-                            <ShieldCheck size={15} /> Cubierto
+                            <ShieldCheck size={15} /> Pagado hoy
                           </span>
                         ) : (
-                          <span className="flex items-center gap-1.5 font-medium text-amber-600">
-                            <ShieldOff size={15} /> Pendiente
-                          </span>
+                          <span className="text-muted">—</span>
                         )}
                       </td>
                       <td className="px-4 py-3.5 text-right font-semibold">{d.completedTrips}</td>

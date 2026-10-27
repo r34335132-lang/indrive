@@ -9,6 +9,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { NavigationBanner } from '@/components/NavigationBanner';
 import { RideChatButton } from '@/components/RideChatSheet';
 import { RideNotice } from '@/components/RideNotice';
+import { RatingTags, StarRatingInput } from '@/components/StarRatingInput';
 import { AppMap } from '@/components/maps/AppMap';
 import { BRAND, cardShadow } from '@/constants/theme';
 import { closeRealtimeChannel, fetchRideLocation, subscribeRideLocation } from '@/lib/api/rides';
@@ -29,6 +30,7 @@ import {
   getOsrmRoute,
   type LatLng,
 } from '@/lib/routing';
+import { skipRating } from '@/lib/ratingPrompt';
 import type { OsrmStep } from '@/types';
 
 type Phase = 'to_pickup' | 'arrived_pickup' | 'to_destination' | 'done';
@@ -86,7 +88,10 @@ export default function RideMapScreen() {
   const router = useRouter();
   const { role, user } = useAuth();
   const {
-    activeRide,
+    activeRide: liveRide,
+    completedRide,
+    dismissCompletedRide,
+    rateRide,
     markArrivedPickup,
     startTrip,
     completeRide,
@@ -95,6 +100,12 @@ export default function RideMapScreen() {
     applyWaitFare,
     publishDriverLocation,
   } = useBooking();
+  const activeRide = liveRide ?? completedRide;
+  const [stars, setStars] = useState(0);
+  const [ratingTags, setRatingTags] = useState<string[]>([]);
+  const [finishing, setFinishing] = useState(false);
+  const [actionError, setActionError] = useState<string | null>(null);
+  const [completing, setCompleting] = useState(false);
 
   const isDriver = role === 'driver';
   const isPassenger = role === 'passenger';
@@ -207,7 +218,10 @@ export default function RideMapScreen() {
         ? 'Tu conductor llegó al punto de partida'
         : 'Rumbo a tu destino';
 
+  const tripDone = phase === 'done';
+
   useEffect(() => {
+    if (tripDone) return;
     let cancelled = false;
     let subscription: Location.LocationSubscription | null = null;
 
@@ -284,7 +298,7 @@ export default function RideMapScreen() {
       cancelled = true;
       subscription?.remove();
     };
-  }, [activeRide?.id, isDriver]);
+  }, [activeRide?.id, isDriver, tripDone]);
 
   useEffect(() => {
     if (!activeRide) return;
@@ -314,7 +328,7 @@ export default function RideMapScreen() {
   }, [phase]);
 
   useEffect(() => {
-    if (!activeRide) return;
+    if (!activeRide || phase === 'done') return;
     const from =
       isDriver && myLocation
         ? myLocation
@@ -384,6 +398,12 @@ export default function RideMapScreen() {
     return () => closeRealtimeChannel(channel);
   }, [activeRide?.id, isPassenger]);
 
+  useEffect(() => {
+    if (activeRide) return;
+    const timer = setTimeout(() => router.replace(isDriver ? '/driver' : '/(tabs)'), 2500);
+    return () => clearTimeout(timer);
+  }, [activeRide, isDriver, router]);
+
   const askLocationAgain = async () => {
     setLocationError(null);
     const asked = await Location.requestForegroundPermissionsAsync();
@@ -432,14 +452,25 @@ export default function RideMapScreen() {
   };
 
   const onCompleteTrip = async () => {
+    if (completing) return;
     const end = new Date();
     const start = tripStartRef.current ?? end;
-    setTripDurationSec(Math.max(1, Math.round((end.getTime() - start.getTime()) / 1000)));
+    setActionError(null);
+    setCompleting(true);
     try {
       await completeRide();
     } catch (error) {
-      console.warn(error);
+      void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Error);
+      setActionError(
+        error instanceof Error
+          ? `${error.message}. Revisa tu conexión e intenta de nuevo.`
+          : 'No se pudo finalizar el viaje. Intenta de nuevo.',
+      );
+      setCompleting(false);
+      return;
     }
+    setCompleting(false);
+    setTripDurationSec(Math.max(1, Math.round((end.getTime() - start.getTime()) / 1000)));
     setPhase('done');
     setShowSummary(true);
     void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success);
@@ -459,18 +490,38 @@ export default function RideMapScreen() {
   };
 
   const finish = async () => {
+    if (finishing) return;
+    const ride = activeRide;
+    if (isPassenger && ride?.status === 'completed' && !ride.rating) {
+      if (stars > 0) {
+        setFinishing(true);
+        setActionError(null);
+        try {
+          await rateRide(ride.id, stars, ratingTags.join(', '));
+        } catch (error) {
+          setFinishing(false);
+          setActionError(error instanceof Error ? error.message : 'No se pudo enviar la calificación');
+          return;
+        }
+      } else {
+        void skipRating(ride.id);
+      }
+    }
     try {
-      await clearActiveRide();
+      if (liveRide) await clearActiveRide();
     } catch {
       // ignore
     }
+    dismissCompletedRide();
     router.replace(isPassenger ? '/(tabs)' : '/driver');
   };
 
   if (!activeRide) {
     return (
       <View style={[styles.loadingScreen, { backgroundColor: colors.background }]}>
-        <Text style={[styles.loadingText, { color: colors.foreground }]}>Sin viaje activo</Text>
+        <Text style={[styles.loadingText, { color: colors.foreground }]}>
+          Este viaje ya terminó o fue cancelado
+        </Text>
         <Pressable
           onPress={() => router.replace(isDriver ? '/driver' : '/(tabs)')}
           style={styles.backLink}
@@ -489,7 +540,7 @@ export default function RideMapScreen() {
         zoom={navigating && navLocked ? 17 : 15}
         userLocation={isDriver ? myLocation : isPassenger ? pickupPoint : myLocation}
         destination={targetPoint}
-        route={routeCoords}
+        route={phase === 'done' ? [] : routeCoords}
         followUser={navigating && navLocked}
         navigationMode={navigating && navLocked}
         heading={heading}
@@ -784,11 +835,18 @@ export default function RideMapScreen() {
           {isDriver && phase === 'to_destination' ? (
             <Pressable
               onPress={() => void onCompleteTrip()}
-              style={[styles.primaryBtn, { backgroundColor: colors.primary }]}
+              disabled={completing}
+              style={[styles.primaryBtn, { backgroundColor: colors.primary, opacity: completing ? 0.75 : 1 }]}
             >
-              <Text style={styles.primaryText}>Finalizar viaje</Text>
+              {completing ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.primaryText}>Finalizar viaje</Text>
+              )}
             </Pressable>
           ) : null}
+
+          {actionError && !showSummary ? <Text style={styles.actionError}>{actionError}</Text> : null}
 
           {canCancel ? (
             <Pressable
@@ -915,11 +973,49 @@ export default function RideMapScreen() {
                 </View>
               </View>
 
+              {isPassenger && activeRide.status === 'completed' ? (
+                activeRide.rating ? (
+                  <View style={styles.ratedRow}>
+                    <Feather name="check-circle" size={16} color={BRAND.green} />
+                    <Text style={styles.ratedText}>Gracias por calificar con {activeRide.rating} ★</Text>
+                  </View>
+                ) : (
+                  <View style={styles.rateBox}>
+                    <Text style={styles.rateTitle}>
+                      ¿Cómo te atendió {activeRide.driverName?.split(' ')[0] || 'tu conductor'}?
+                    </Text>
+                    <StarRatingInput value={stars} onChange={setStars} size={34} disabled={finishing} />
+                    {stars ? (
+                      <RatingTags
+                        selected={ratingTags}
+                        disabled={finishing}
+                        onToggle={(tag) =>
+                          setRatingTags((cur) =>
+                            cur.includes(tag) ? cur.filter((t) => t !== tag) : [...cur, tag],
+                          )
+                        }
+                      />
+                    ) : null}
+                  </View>
+                )
+              ) : null}
+
+              {actionError ? <Text style={styles.actionError}>{actionError}</Text> : null}
+
               <Pressable
                 onPress={() => void finish()}
-                style={({ pressed }) => [styles.finishBtn, pressed && { opacity: 0.85 }]}
+                disabled={finishing}
+                style={({ pressed }) => [styles.finishBtn, (pressed || finishing) && { opacity: 0.85 }]}
               >
-                <Text style={styles.finishText}>Listo</Text>
+                {finishing ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.finishText}>
+                    {isPassenger && activeRide.status === 'completed' && !activeRide.rating && stars
+                      ? 'Enviar calificación'
+                      : 'Listo'}
+                  </Text>
+                )}
               </Pressable>
             </View>
           </View>
@@ -1124,6 +1220,26 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
   },
   finishText: { color: '#fff', fontFamily: 'Inter_700Bold', fontSize: 16 },
+  rateBox: {
+    alignItems: 'center',
+    backgroundColor: '#f7faf8',
+    borderColor: '#e3ebe6',
+    borderRadius: 18,
+    borderWidth: 1,
+    gap: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 14,
+  },
+  rateTitle: { color: '#10221c', fontFamily: 'Inter_700Bold', fontSize: 15, textAlign: 'center' },
+  ratedRow: { alignItems: 'center', flexDirection: 'row', gap: 8, justifyContent: 'center' },
+  ratedText: { color: '#138a68', fontFamily: 'Inter_600SemiBold', fontSize: 13 },
+  actionError: {
+    color: '#d64545',
+    fontFamily: 'Inter_600SemiBold',
+    fontSize: 12,
+    lineHeight: 17,
+    textAlign: 'center',
+  },
   toolBtn: {
     alignItems: 'center',
     backgroundColor: '#fff',

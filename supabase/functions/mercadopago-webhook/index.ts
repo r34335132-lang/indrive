@@ -147,7 +147,7 @@ Deno.serve(async (req) => {
 async function handleDeposit(admin: any, depositId: string, payment: any, mapped: string) {
   const { data: deposit } = await admin
     .from('driver_deposits')
-    .select('id, driver_id, amount, status')
+    .select('id, driver_id, amount, status, block_id')
     .eq('id', depositId)
     .maybeSingle();
   if (!deposit) {
@@ -171,10 +171,36 @@ async function handleDeposit(admin: any, depositId: string, payment: any, mapped
     })
     .eq('id', deposit.id);
 
+  if (!deposit.block_id) {
+    if (status === 'approved') {
+      await admin
+        .from('profiles')
+        .update({ block_fee_satisfied: true, block_fee_satisfied_at: new Date().toISOString() })
+        .eq('id', deposit.driver_id);
+    }
+    return;
+  }
+
   if (status === 'approved') {
+    const { data: updated } = await admin
+      .from('driver_daily_blocks')
+      .update({
+        status: 'paid',
+        method: 'mercadopago',
+        deposit_id: deposit.id,
+        paid_at: new Date().toISOString(),
+      })
+      .eq('id', deposit.block_id)
+      .eq('status', 'pending')
+      .select('id');
+    if (!updated?.length) {
+      console.warn('Bloque ya cubierto antes del pago MP; revisar posible doble cobro', deposit.block_id, payment.id);
+    }
+  } else if (status === 'refunded') {
     await admin
-      .from('profiles')
-      .update({ block_fee_satisfied: true, block_fee_satisfied_at: new Date().toISOString() })
-      .eq('id', deposit.driver_id);
+      .from('driver_daily_blocks')
+      .update({ status: 'pending', method: null, deposit_id: null, paid_at: null })
+      .eq('id', deposit.block_id)
+      .eq('deposit_id', deposit.id);
   }
 }

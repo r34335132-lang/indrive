@@ -30,6 +30,14 @@ export function TripCard({
 }) {
   const colors = useColors();
   const displayAmount = showDriverEarnings ? trip.driverNet : trip.price;
+  const statusTone =
+    trip.status === 'Completado'
+      ? { bg: colors.secondary, fg: colors.primary }
+      : trip.status === 'En camino'
+        ? { bg: '#e8f1ff', fg: '#3b6fd9' }
+        : trip.status === 'Cancelado'
+          ? { bg: '#fdecec', fg: '#c24141' }
+          : { bg: '#fff3db', fg: '#a66d16' };
   const content = (
     <View style={[styles.card, { backgroundColor: colors.card, borderColor: colors.border }]}>
       <View style={styles.top}>
@@ -37,32 +45,8 @@ export function TripCard({
           <Feather name="calendar" size={15} color={colors.primary} />
           <Text style={[styles.date, { color: colors.secondaryForeground }]}>{trip.date}</Text>
         </View>
-        <View
-          style={[
-            styles.status,
-            {
-              backgroundColor:
-                trip.status === 'Completado'
-                  ? colors.secondary
-                  : trip.status === 'En camino'
-                    ? '#e8f1ff'
-                    : '#fff3db',
-            },
-          ]}
-        >
-          <Text
-            style={[
-              styles.statusText,
-              {
-                color:
-                  trip.status === 'Completado'
-                    ? colors.primary
-                    : trip.status === 'En camino'
-                      ? '#3b6fd9'
-                      : '#a66d16',
-              },
-            ]}
-          >
+        <View style={[styles.status, { backgroundColor: statusTone.bg }]}>
+          <Text style={[styles.statusText, { color: statusTone.fg }]}>
             {trip.status}
           </Text>
         </View>

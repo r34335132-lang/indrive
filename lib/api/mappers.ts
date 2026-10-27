@@ -233,6 +233,8 @@ export function mapLocation(row: LocRow): RideLocation {
 
 export function rideStatusToTripStatus(status: Ride['status']): Trip['status'] {
   if (status === 'completed') return 'Completado';
+  if (status === 'cancelled') return 'Cancelado';
+  if (status === 'searching' || status === 'offered') return 'Buscando';
   if (
     status === 'en_route_pickup' ||
     status === 'arrived_pickup' ||

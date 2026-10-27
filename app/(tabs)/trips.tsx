@@ -17,7 +17,9 @@ export default function TripsScreen() {
   const filtered = trips.filter(
     (trip) =>
       filter === 'Todos' ||
-      (filter === 'Completados' ? trip.status === 'Completado' : trip.status !== 'Completado'),
+      (filter === 'Completados'
+        ? trip.status === 'Completado'
+        : trip.status !== 'Completado' && trip.status !== 'Cancelado'),
   );
 
   const completed = trips.filter((t) => t.status === 'Completado');

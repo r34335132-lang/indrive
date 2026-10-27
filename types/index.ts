@@ -36,7 +36,7 @@ export type RideStatus =
   | 'completed'
   | 'cancelled';
 
-export type TripStatus = 'Confirmado' | 'En camino' | 'Completado';
+export type TripStatus = 'Confirmado' | 'Buscando' | 'En camino' | 'Completado' | 'Cancelado';
 
 export type VehicleType = 'Sedan' | 'SUV';
 

@@ -54,6 +54,10 @@ export default function RegisterDriverScreen() {
         <View style={styles.header}>
           <Pressable
             onPress={async () => {
+              if (docsComplete) {
+                router.replace('/driver');
+                return;
+              }
               await logout();
               router.replace('/welcome');
             }}
@@ -71,9 +75,9 @@ export default function RegisterDriverScreen() {
         <LinearGradient colors={['#16362f', '#138a68']} style={styles.banner}>
           <Text style={styles.bannerTitle}>Verificación inride</Text>
           <Text style={styles.bannerCopy}>
-            Sube fotos claras de tus documentos. Podrás trabajar en cuanto completes la carga; el
-            equipo los revisa después. Tus archivos se guardan de forma privada y solo se usan para
-            verificación.
+            Sube fotos claras de tus documentos. Al enviarlos, tu cuenta quedará en revisión y el
+            equipo inride te habilitará para recibir viajes cuando los apruebe. Tus archivos se
+            guardan de forma privada y solo se usan para verificación.
           </Text>
           <View style={styles.progressRow}>
             <View style={styles.progressTrack}>
@@ -82,9 +86,23 @@ export default function RegisterDriverScreen() {
             <Text style={styles.progressText}>{uploadedCount}/5</Text>
           </View>
           <Text style={styles.reviewHint}>
-            Estado revisión: {driverDocs.reviewStatus === 'approved' ? 'Aprobado' : 'Pendiente'}
+            Estado:{' '}
+            {driverDocs.reviewStatus === 'approved'
+              ? 'Aprobado ✓'
+              : driverDocs.reviewStatus === 'rejected'
+                ? 'Rechazado · corrige y vuelve a subir'
+                : docsComplete
+                  ? 'En revisión'
+                  : 'Faltan documentos'}
           </Text>
         </LinearGradient>
+
+        {driverDocs.reviewStatus === 'rejected' && driverDocs.reviewNote ? (
+          <View style={styles.rejectBox}>
+            <Feather name="alert-circle" size={16} color="#c24141" />
+            <Text style={styles.rejectText}>{driverDocs.reviewNote}</Text>
+          </View>
+        ) : null}
 
         <DriverPhotoCard />
 
@@ -160,7 +178,11 @@ export default function RegisterDriverScreen() {
             style={styles.primaryBtn}
           >
             <Text style={styles.primaryBtnText}>
-              {docsComplete ? 'Continuar al centro del conductor' : 'Sube los 5 documentos'}
+              {!docsComplete
+                ? 'Sube los 5 documentos'
+                : driverDocs.reviewStatus === 'approved'
+                  ? 'Continuar al centro del conductor'
+                  : 'Enviar a revisión'}
             </Text>
           </LinearGradient>
         </Pressable>
@@ -233,6 +255,16 @@ const styles = StyleSheet.create({
     width: 28,
   },
   error: { color: '#dc2626', fontFamily: 'Inter_500Medium', fontSize: 12, textAlign: 'center' },
+  rejectBox: {
+    backgroundColor: '#fff6f6',
+    borderColor: '#f2c4c4',
+    borderRadius: 16,
+    borderWidth: 1,
+    flexDirection: 'row',
+    gap: 10,
+    padding: 14,
+  },
+  rejectText: { color: '#7a2a2a', flex: 1, fontFamily: 'Inter_500Medium', fontSize: 13, lineHeight: 18 },
   primaryBtnWrap: { borderRadius: 16, overflow: 'hidden' },
   primaryBtn: { alignItems: 'center', paddingVertical: 16 },
   primaryBtnText: { color: '#ffffff', fontFamily: 'Inter_700Bold', fontSize: 14 },

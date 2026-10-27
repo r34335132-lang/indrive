@@ -1,5 +1,5 @@
 import { Feather, MaterialCommunityIcons } from '@expo/vector-icons';
-import { type Href, Redirect, useRouter } from 'expo-router';
+import { type Href, Redirect, useFocusEffect, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -15,6 +15,7 @@ import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { InrideWordmark } from '@/components/InrideMark';
 import { AppMap } from '@/components/maps/AppMap';
 import { MapSafeBoundary } from '@/components/maps/MapSafeBoundary';
+import { RateDriverModal } from '@/components/RateDriverModal';
 import { SideMenu } from '@/components/SideMenu';
 import { formatMoney } from '@/constants/pricing';
 import { BRAND, cardShadow } from '@/constants/theme';
@@ -32,6 +33,7 @@ import {
   searchPlaces,
   type Place,
 } from '@/lib/places';
+import { getSkippedRatings, skipRating } from '@/lib/ratingPrompt';
 import { getOsrmRouteVia, straightLineRoute } from '@/lib/routing';
 import type { MapCoordinate, OsrmRoute, VehicleType } from '@/types';
 
@@ -66,7 +68,34 @@ export default function HomeScreen() {
   const insets = useSafeAreaInsets();
   const router = useRouter();
   const { user, role, isReady, logout } = useAuth();
-  const { requestRide, trips } = useBooking();
+  const { requestRide, trips, activeRide, completedRide, dismissCompletedRide, rateRide } = useBooking();
+  const [focused, setFocused] = useState(true);
+  const [skippedRatings, setSkippedRatings] = useState<string[] | null>(null);
+
+  useFocusEffect(
+    useCallback(() => {
+      setFocused(true);
+      return () => setFocused(false);
+    }, []),
+  );
+
+  useEffect(() => {
+    void getSkippedRatings().then(setSkippedRatings);
+  }, []);
+
+  const tripToRate = useMemo(() => {
+    if (!skippedRatings || activeRide) return null;
+    return (
+      trips.find(
+        (t) =>
+          t.role === 'passenger' &&
+          t.status === 'Completado' &&
+          typeof t.rating !== 'number' &&
+          Date.now() - new Date(t.createdAt).getTime() < 24 * 60 * 60 * 1000 &&
+          !skippedRatings.includes(t.id),
+      ) ?? null
+    );
+  }, [activeRide, skippedRatings, trips]);
   const { getFare } = useTariff();
   const { coords, refresh, status: locationStatus } = useLocation();
 
@@ -693,6 +722,24 @@ export default function HomeScreen() {
         </View>
       </View>
       )}
+
+      <RateDriverModal
+        visible={focused && !!tripToRate && !searchOpen && !menuOpen && !requesting}
+        driverName={tripToRate?.driverName && tripToRate.driverName !== '—' ? tripToRate.driverName : 'tu conductor'}
+        subtitle={tripToRate ? `${tripToRate.destination.split(',')[0]} · ${tripToRate.time}` : undefined}
+        onSubmit={async (stars, comment) => {
+          if (!tripToRate) return;
+          await rateRide(tripToRate.id, stars, comment);
+          if (completedRide?.id === tripToRate.id) dismissCompletedRide();
+        }}
+        onSkip={() => {
+          if (!tripToRate) return;
+          const id = tripToRate.id;
+          void skipRating(id);
+          setSkippedRatings((cur) => [id, ...(cur ?? [])]);
+          if (completedRide?.id === id) dismissCompletedRide();
+        }}
+      />
 
       <SideMenu
         visible={menuOpen}

@@ -10,6 +10,7 @@ import { Drivers } from './pages/Drivers';
 import { Login } from './pages/Login';
 import { Overview } from './pages/Overview';
 import { Passengers } from './pages/Passengers';
+import { Payouts } from './pages/Payouts';
 import { Tariffs } from './pages/Tariffs';
 import { Trips } from './pages/Trips';
 
@@ -43,6 +44,7 @@ export default function App() {
         {route === 'drivers' ? <Drivers /> : null}
         {route === 'trips' ? <Trips /> : null}
         {route === 'deposits' ? <Deposits /> : null}
+        {route === 'payouts' ? <Payouts /> : null}
         {route === 'passengers' ? <Passengers /> : null}
         {route === 'tariffs' ? <Tariffs /> : null}
       </Shell>

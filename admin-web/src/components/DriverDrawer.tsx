@@ -14,10 +14,18 @@ import {
 } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useState } from 'react';
-import { reviewDriver, setBlockFee, signedDocUrl } from '../lib/api';
+import { resolveDailyBlock, reviewDriver, signedDocUrl } from '../lib/api';
 import { useAdminData } from '../lib/data';
-import { ageFrom, formatDate, formatMoney, REVIEW_STATUS, TIER_LABEL, timeAgo } from '../lib/format';
-import { DOC_KEYS, DOC_LABELS, type DocKey, type Driver } from '../lib/types';
+import { ageFrom, formatDate, formatDay, formatMoney, REVIEW_STATUS, TIER_LABEL, timeAgo } from '../lib/format';
+import {
+  DOC_KEYS,
+  DOC_LABELS,
+  type DailyBlock,
+  type DailyBlockStatus,
+  type DocKey,
+  type Driver,
+} from '../lib/types';
+import { BlockActions } from '../pages/Deposits';
 import { Drawer } from './Drawer';
 import { Avatar, Badge, cx } from './ui';
 
@@ -74,18 +82,26 @@ export function DriverDrawer({ driver, onClose }: { driver: Driver | null; onClo
     }
   };
 
-  const toggleFee = async () => {
-    if (!driver) return;
+  const resolveBlock = async (block: DailyBlock, next: DailyBlockStatus) => {
+    const question =
+      next === 'paid'
+        ? `¿Registrar pago en efectivo del bloque del ${formatDay(block.day)} (${formatMoney(block.amount)})?`
+        : `¿Condonar el bloque del ${formatDay(block.day)}?`;
+    if (!window.confirm(question)) return;
     setBusy('fee');
     try {
-      await setBlockFee(driver.id, !driver.block_fee_satisfied);
+      await resolveDailyBlock(block.id, next);
       await refresh();
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'No se pudo actualizar el depósito');
+      setError(e instanceof Error ? e.message : 'No se pudo actualizar el bloque');
     } finally {
       setBusy(null);
     }
   };
+
+  const pendingBlocks = driver
+    ? [...driver.blocksOverdue, ...(driver.blockToday?.status === 'pending' ? [driver.blockToday] : [])]
+    : [];
 
   const status = driver?.docs?.review_status ?? 'pending';
   const age = ageFrom(driver?.birthdate);
@@ -184,43 +200,48 @@ export function DriverDrawer({ driver, onClose }: { driver: Driver | null; onClo
               <Stat label="Último viaje" value={driver.lastTripAt ? timeAgo(driver.lastTripAt) : '—'} />
             </section>
 
-            <section className="flex items-center justify-between gap-4 rounded-3xl bg-white p-5 ring-1 ring-line">
+            <section className="rounded-3xl bg-white p-5 ring-1 ring-line">
               <div className="flex items-center gap-3">
                 <span
                   className={cx(
                     'flex h-10 w-10 items-center justify-center rounded-2xl',
-                    driver.block_fee_satisfied ? 'bg-emerald-50 text-emerald-600' : 'bg-amber-50 text-amber-600',
+                    driver.blocksOverdue.length
+                      ? 'bg-rose-50 text-rose-600'
+                      : pendingBlocks.length
+                        ? 'bg-amber-50 text-amber-600'
+                        : 'bg-emerald-50 text-emerald-600',
                   )}
                 >
                   <ShieldCheck size={20} />
                 </span>
                 <div>
-                  <p className="font-bold">Depósito de sistema</p>
+                  <p className="font-bold">Bloque de sistema diario</p>
                   <p className="text-sm text-muted">
-                    {driver.block_fee_satisfied
-                      ? `Cubierto ${driver.block_fee_satisfied_at ? timeAgo(driver.block_fee_satisfied_at) : ''}`
-                      : 'Pendiente de pago'}
+                    {driver.blocksOverdue.length
+                      ? `${driver.blocksOverdue.length} vencido(s): no puede aceptar viajes`
+                      : driver.blockToday?.status === 'pending'
+                        ? 'Juntó el bloque de hoy; tiene hasta las 11:59 pm'
+                        : driver.blockToday
+                          ? `Hoy ${driver.blockToday.status === 'waived' ? 'condonado' : 'pagado'}${driver.blockToday.paid_at ? ` ${timeAgo(driver.blockToday.paid_at)}` : ''}`
+                          : 'Al corriente · hoy aún no junta el bloque'}
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => void toggleFee()}
-                disabled={busy === 'fee'}
-                className={cx(
-                  'relative h-7 w-12 rounded-full transition-colors',
-                  driver.block_fee_satisfied ? 'bg-teal-500' : 'bg-slate-300',
-                )}
-                aria-label="Cambiar estado del depósito"
-              >
-                <motion.span
-                  layout
-                  transition={{ type: 'spring', stiffness: 500, damping: 32 }}
-                  className={cx(
-                    'absolute top-1 h-5 w-5 rounded-full bg-white shadow',
-                    driver.block_fee_satisfied ? 'right-1' : 'left-1',
-                  )}
-                />
-              </button>
+              {pendingBlocks.length ? (
+                <div className="mt-4 divide-y divide-line rounded-2xl ring-1 ring-line">
+                  {pendingBlocks.map((b) => (
+                    <div key={b.id} className="flex items-center gap-3 px-4 py-2.5">
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold capitalize">{formatDay(b.day)}</p>
+                        <p className="text-xs text-muted">
+                          {formatMoney(b.amount)} · ganó {formatMoney(b.earned)}
+                        </p>
+                      </div>
+                      <BlockActions busy={busy === 'fee'} onResolve={(s) => void resolveBlock(b, s)} />
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </section>
 
             <section>
