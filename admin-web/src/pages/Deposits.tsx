@@ -1,6 +1,7 @@
-import { Ban, Banknote, CheckCircle2, Clock3, Download, ShieldAlert, Undo2, Wallet } from 'lucide-react';
+import { Banknote, CheckCircle2, Clock3, Download, ShieldAlert, Undo2, Wallet } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { useEffect, useMemo, useState } from 'react';
+import { BlockActions } from '../components/BlockActions';
 import {
   AnimatedNumber,
   Avatar,
@@ -15,25 +16,14 @@ import {
   Skeleton,
 } from '../components/ui';
 import { fetchActiveTariff, resolveDailyBlock } from '../lib/api';
+import { BLOCK_METHOD_LABEL as METHOD_LABEL, blockStatus as statusOf, type BlockRow as Row } from '../lib/blocks';
 import { useAdminData } from '../lib/data';
-import { formatDateTime, formatDay, formatMoney, timeAgo, todayMx, type Tone } from '../lib/format';
-import type { DailyBlock, DailyBlockStatus, Driver, DriverDeposit } from '../lib/types';
-
-const METHOD_LABEL: Record<string, string> = {
-  mercadopago: 'Mercado Pago',
-  balance: 'Saldo de tarjeta',
-  admin: 'Efectivo (oficina)',
-};
+import { formatDateTime, formatDay, formatMoney, timeAgo, todayMx } from '../lib/format';
+import type { DailyBlockStatus } from '../lib/types';
+import { BlocksByDay } from './BlocksByDay';
 
 type Filter = 'all' | 'pending' | 'paid' | 'waived';
-
-type Row = DailyBlock & { driver: Driver | undefined; deposit: DriverDeposit | undefined; overdue: boolean };
-
-function statusOf(r: Row): { label: string; tone: Tone } {
-  if (r.status === 'paid') return { label: 'Pagado', tone: 'green' };
-  if (r.status === 'waived') return { label: 'Condonado', tone: 'slate' };
-  return r.overdue ? { label: 'Vencido', tone: 'rose' } : { label: 'Pendiente hoy', tone: 'amber' };
-}
+type View = 'days' | 'list';
 
 function exportCsv(rows: Row[]) {
   const header = ['Día', 'Conductor', 'Email', 'Ganó ese día', 'Bloque', 'Estado', 'Método', 'Pago MP', 'Pagado'];
@@ -63,6 +53,7 @@ function exportCsv(rows: Row[]) {
 
 export function Deposits() {
   const { dailyBlocks, deposits, drivers, loading, refresh } = useAdminData();
+  const [view, setView] = useState<View>('days');
   const [filter, setFilter] = useState<Filter>('all');
   const [query, setQuery] = useState('');
   const [fee, setFee] = useState(300);
@@ -176,17 +167,31 @@ export function Deposits() {
         actions={
           <>
             <SearchInput value={query} onChange={setQuery} placeholder="Conductor, fecha o ID de pago…" />
-            <motion.button
-              whileTap={{ scale: 0.96 }}
-              onClick={() => exportCsv(list)}
-              disabled={!list.length}
-              className="flex h-11 items-center gap-2 rounded-2xl bg-navy-900 px-4 text-sm font-bold text-white shadow-lift transition hover:bg-navy-800 disabled:opacity-50"
-            >
-              <Download size={16} /> Exportar CSV
-            </motion.button>
+            {view === 'list' ? (
+              <motion.button
+                whileTap={{ scale: 0.96 }}
+                onClick={() => exportCsv(list)}
+                disabled={!list.length}
+                className="flex h-11 items-center gap-2 rounded-2xl bg-navy-900 px-4 text-sm font-bold text-white shadow-lift transition hover:bg-navy-800 disabled:opacity-50"
+              >
+                <Download size={16} /> Exportar CSV
+              </motion.button>
+            ) : null}
           </>
         }
       />
+
+      <div className="mb-5">
+        <Segmented
+          id="blocks-view"
+          value={view}
+          onChange={setView}
+          options={[
+            { value: 'days', label: 'Historial por día' },
+            { value: 'list', label: 'Todos los bloques', count: rows.length },
+          ]}
+        />
+      </div>
 
       <div className="mb-6 grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
         <Stat
@@ -223,6 +228,15 @@ export function Deposits() {
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_380px]">
+        {view === 'days' ? (
+          <BlocksByDay
+            rows={rows}
+            fee={fee}
+            query={query}
+            busyId={busyId}
+            onResolve={(r, s) => void resolve(r, s)}
+          />
+        ) : (
         <div>
           <div className="mb-4">
             <Segmented
@@ -341,6 +355,7 @@ export function Deposits() {
             )}
           </div>
         </div>
+        )}
 
         <Card className="h-fit pb-2" delay={0.1}>
           <CardHeader
@@ -395,37 +410,6 @@ export function Deposits() {
           </motion.div>
         ) : null}
       </AnimatePresence>
-    </div>
-  );
-}
-
-export function BlockActions({
-  busy,
-  onResolve,
-}: {
-  busy: boolean;
-  onResolve: (status: DailyBlockStatus) => void;
-}) {
-  return (
-    <div className="flex items-center justify-end gap-1.5">
-      <motion.button
-        whileTap={{ scale: 0.95 }}
-        disabled={busy}
-        onClick={() => onResolve('paid')}
-        className="rounded-xl bg-teal-500/10 px-3 py-1.5 text-xs font-bold text-teal-700 transition hover:bg-teal-500/20 disabled:opacity-50"
-        title="Pagó en efectivo en la oficina"
-      >
-        {busy ? '…' : 'Efectivo'}
-      </motion.button>
-      <motion.button
-        whileTap={{ scale: 0.95 }}
-        disabled={busy}
-        onClick={() => onResolve('waived')}
-        className="flex items-center gap-1 rounded-xl px-2.5 py-1.5 text-xs font-bold text-slate-500 transition hover:bg-slate-100 disabled:opacity-50"
-        title="No cobrar este bloque"
-      >
-        <Ban size={13} /> Condonar
-      </motion.button>
     </div>
   );
 }

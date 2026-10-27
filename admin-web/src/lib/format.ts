@@ -36,6 +36,15 @@ const mxDay = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Monterrey' }
 /** Hoy en La Laguna / Durango como `YYYY-MM-DD` (mismo criterio que `inride_today()` en la BD). */
 export const todayMx = () => mxDay.format(new Date());
 
+/** Día (`YYYY-MM-DD`, hora de La Laguna) de un timestamp. */
+export const dayMx = (iso: string) => mxDay.format(new Date(iso));
+
+/** Suma `n` días a un `YYYY-MM-DD`. */
+export function shiftDay(day: string, n: number) {
+  const [y, m, d] = day.split('-').map(Number);
+  return new Date(Date.UTC(y, m - 1, d + n)).toISOString().slice(0, 10);
+}
+
 /** `2026-10-27` → `mar 27 oct` */
 export function formatDay(day: string) {
   const [y, m, d] = day.split('-').map(Number);

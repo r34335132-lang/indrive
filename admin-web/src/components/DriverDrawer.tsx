@@ -25,7 +25,7 @@ import {
   type DocKey,
   type Driver,
 } from '../lib/types';
-import { BlockActions } from '../pages/Deposits';
+import { BlockActions } from './BlockActions';
 import { Drawer } from './Drawer';
 import { Avatar, Badge, cx } from './ui';
 
